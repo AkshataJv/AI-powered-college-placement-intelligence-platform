@@ -1,0 +1,66 @@
+# ==============================
+# CareerCompass — Root .gitignore
+# ==============================
+
+# ── Node.js ──────────────────
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+*.log
+
+# ── Build output ─────────────
+dist/
+dist-ssr/
+
+# ── Environment / secrets ────
+.env
+.env.local
+frontend/.env
+backend/.env
+*.local
+
+# ── SQLite data & uploads ────
+# The data/ directory holds the SQLite DB and uploaded files; keep out of Git
+data/
+
+# ── Python ───────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.Python
+*.egg
+*.egg-info/
+*.dist-info/
+build/
+*.whl
+
+# Python virtual environments
+.venv/
+venv/
+env/
+backend/venv/
+backend/.venv/
+
+# ── Editor ───────────────────
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+
+# ── OS ───────────────────────
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# ── Backend uploads ──────────
+backend/uploads/resumes/
