@@ -37,6 +37,11 @@ function publicUser(row) {
     skills: parseJson(row.skills_json),
     company: row.company,
     jobTitle: row.job_title,
+    experience: row.experience || '',
+    bio: row.bio || '',
+    passoutYear: row.passout_year || 0,
+    linkedinUrl: row.linkedin_url || '',
+    semGpa: parseJson(row.sem_gpa_json, {}),
   }
 }
 
@@ -223,14 +228,59 @@ app.get('/api/student/profile', requireAuth, requireRole('Student'), (req, res) 
 })
 
 app.put('/api/student/profile', requireAuth, requireRole('Student'), (req, res) => {
-  const { name, branch, cgpa, backlogs, certifications, skills } = req.body || {}
+  const { name, branch, cgpa, backlogs, certifications, skills, semGpa } = req.body || {}
   if (!String(name || '').trim() || !branches.includes(branch)) return res.status(400).json({ error: 'Name and a valid branch are required.' })
   if (!Number.isFinite(Number(cgpa)) || Number(cgpa) < 0 || Number(cgpa) > 10) return res.status(400).json({ error: 'CGPA must be between 0 and 10.' })
   if (!Number.isInteger(Number(backlogs)) || Number(backlogs) < 0) return res.status(400).json({ error: 'Backlogs must be zero or more.' })
   if (!Array.isArray(skills) || skills.some((skill) => typeof skill !== 'string')) return res.status(400).json({ error: 'Skills must be a list of text values.' })
-  db.prepare('UPDATE users SET name = ?, branch = ?, cgpa = ?, backlogs = ?, certifications = ?, skills_json = ? WHERE id = ?')
-    .run(String(name).trim(), branch, Number(cgpa), Number(backlogs), Math.max(0, Number(certifications) || 0), JSON.stringify(skills.map((skill) => skill.trim()).filter(Boolean)), req.user.id)
+
+  let semGpaJson = undefined
+  if (semGpa && typeof semGpa === 'object') {
+    const cleaned = {}
+    for (let sem = 1; sem <= 8; sem++) {
+      const val = semGpa[sem] ?? semGpa[`sem${sem}`]
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        const num = Number(val)
+        if (Number.isFinite(num) && num >= 0 && num <= 10) cleaned[sem] = Number(num.toFixed(2))
+      }
+    }
+    semGpaJson = JSON.stringify(cleaned)
+  }
+
+  if (semGpaJson !== undefined) {
+    db.prepare('UPDATE users SET name = ?, branch = ?, cgpa = ?, backlogs = ?, certifications = ?, skills_json = ?, sem_gpa_json = ? WHERE id = ?')
+      .run(String(name).trim(), branch, Number(cgpa), Number(backlogs), Math.max(0, Number(certifications) || 0), JSON.stringify(skills.map((skill) => skill.trim()).filter(Boolean)), semGpaJson, req.user.id)
+  } else {
+    db.prepare('UPDATE users SET name = ?, branch = ?, cgpa = ?, backlogs = ?, certifications = ?, skills_json = ? WHERE id = ?')
+      .run(String(name).trim(), branch, Number(cgpa), Number(backlogs), Math.max(0, Number(certifications) || 0), JSON.stringify(skills.map((skill) => skill.trim()).filter(Boolean)), req.user.id)
+  }
   res.json({ profile: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) })
+})
+
+app.put('/api/student/sem-gpa', requireAuth, requireRole('Student'), (req, res) => {
+  const rawSemGpa = req.body?.semGpa || {}
+  const cleaned = {}
+  let total = 0
+  let count = 0
+  for (let sem = 1; sem <= 8; sem++) {
+    const val = rawSemGpa[sem] ?? rawSemGpa[`sem${sem}`]
+    if (val !== undefined && val !== null && String(val).trim() !== '') {
+      const num = Number(val)
+      if (Number.isFinite(num) && num >= 0 && num <= 10) {
+        cleaned[sem] = Number(num.toFixed(2))
+        total += num
+        count++
+      }
+    }
+  }
+  const current = db.prepare('SELECT cgpa FROM users WHERE id = ?').get(req.user.id)
+  const nextCgpa = count > 0 ? Number((total / count).toFixed(2)) : (current?.cgpa || 0)
+
+  db.prepare('UPDATE users SET sem_gpa_json = ?, cgpa = ? WHERE id = ?')
+    .run(JSON.stringify(cleaned), nextCgpa, req.user.id)
+
+  const updatedUser = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)
+  res.json({ profile: publicUser(updatedUser), semGpa: cleaned, cgpa: nextCgpa })
 })
 
 app.post('/api/student/resume', requireAuth, requireRole('Student'), (req, res) => {
@@ -287,6 +337,18 @@ const certificateUpload = multer({
   },
 })
 
+const scorecardUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, uploadDirectory),
+    filename: (_req, _file, callback) => callback(null, `${randomUUID()}.pdf`),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    if (path.extname(file.originalname).toLowerCase() !== '.pdf' || file.mimetype !== 'application/pdf') return callback(new Error('Choose a consolidated PDF scorecard.'))
+    callback(null, true)
+  },
+})
+
 app.get('/api/student/resume', requireAuth, requireRole('Student'), (req, res) => {
   const resume = db.prepare('SELECT original_name, size_bytes, uploaded_at FROM resumes WHERE student_id = ?').get(req.user.id)
   res.json({ resume: resume ? { name: resume.original_name, size: resume.size_bytes, uploadedAt: resume.uploaded_at } : null })
@@ -299,6 +361,44 @@ app.get('/api/student/resume/file', requireAuth, requireRole('Student'), (req, r
   res.set('Content-Disposition', `inline; filename="${path.basename(resume.original_name).replace(/"/g, '')}"`)
   res.set('X-Content-Type-Options', 'nosniff')
   return res.sendFile(path.join(uploadDirectory, resume.stored_name))
+})
+
+app.post('/api/student/scorecard', requireAuth, requireRole('Student'), (req, res) => {
+  scorecardUpload.single('scorecard')(req, res, (error) => {
+    if (error) return res.status(400).json({ error: error.message || 'Scorecard upload failed.' })
+    if (!req.file) return res.status(400).json({ error: 'Choose a consolidated PDF scorecard to upload.' })
+    const descriptor = fs.openSync(req.file.path, 'r')
+    const signature = Buffer.alloc(5)
+    fs.readSync(descriptor, signature, 0, signature.length, 0)
+    fs.closeSync(descriptor)
+    if (signature.toString() !== '%PDF-') {
+      fs.rmSync(req.file.path, { force: true })
+      return res.status(400).json({ error: 'The uploaded file is not a valid PDF.' })
+    }
+    const previous = db.prepare('SELECT stored_name FROM scorecards WHERE student_id = ?').get(req.user.id)
+    db.prepare(`INSERT INTO scorecards (student_id, original_name, stored_name, size_bytes, uploaded_at)
+      VALUES (?, ?, ?, ?, datetime('now'))
+      ON CONFLICT(student_id) DO UPDATE SET original_name = excluded.original_name, stored_name = excluded.stored_name, size_bytes = excluded.size_bytes, uploaded_at = datetime('now')`)
+      .run(req.user.id, path.basename(req.file.originalname), req.file.filename, req.file.size)
+    if (previous?.stored_name) fs.rm(path.join(uploadDirectory, previous.stored_name), { force: true }, () => {})
+    return res.status(201).json({ scorecard: { name: path.basename(req.file.originalname), size: req.file.size, uploadedAt: new Date().toISOString() } })
+  })
+})
+
+app.get('/api/student/scorecard', requireAuth, requireRole('Student'), (req, res) => {
+  const scorecard = db.prepare('SELECT original_name, size_bytes, uploaded_at FROM scorecards WHERE student_id = ?').get(req.user.id)
+  res.json({ scorecard: scorecard ? { name: scorecard.original_name, size: scorecard.size_bytes, uploadedAt: scorecard.uploaded_at } : null })
+})
+
+app.get('/api/student/scorecard/file', requireAuth, requireRole('Student'), (req, res) => {
+  const scorecard = db.prepare('SELECT original_name, stored_name FROM scorecards WHERE student_id = ?').get(req.user.id)
+  if (!scorecard) return res.status(404).json({ error: 'No consolidated scorecard has been uploaded.' })
+  const filePath = path.join(uploadDirectory, scorecard.stored_name)
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Scorecard file is not available on disk.' })
+  res.set('Content-Type', 'application/pdf')
+  res.set('Content-Disposition', `inline; filename="${path.basename(scorecard.original_name).replace(/"/g, '')}"`)
+  res.set('X-Content-Type-Options', 'nosniff')
+  return res.sendFile(filePath)
 })
 
 app.get('/api/student/certificates', requireAuth, requireRole('Student'), (req, res) => {
@@ -520,6 +620,7 @@ app.get('/api/tp/students', requireAuth, requireRole('T&P Officer'), (_req, res)
   const rows = db.prepare(`
     SELECT u.id, u.name, u.email, u.branch, u.cgpa, u.backlogs, u.skills_json,
       EXISTS(SELECT 1 FROM resumes r WHERE r.student_id = u.id) AS has_resume,
+      EXISTS(SELECT 1 FROM scorecards sc WHERE sc.student_id = u.id) AS has_scorecard,
       (SELECT COUNT(*) FROM certificates c WHERE c.student_id = u.id) AS certificate_count
     FROM users u
     WHERE u.role = 'Student'
@@ -535,6 +636,7 @@ app.get('/api/tp/students', requireAuth, requireRole('T&P Officer'), (_req, res)
       backlogs: row.backlogs,
       skills: parseJson(row.skills_json),
       hasResume: Boolean(row.has_resume),
+      hasScorecard: Boolean(row.has_scorecard),
       certificateCount: row.certificate_count,
     })),
   })
@@ -544,12 +646,15 @@ app.get('/api/tp/students/:id', requireAuth, requireRole('T&P Officer'), (req, r
   const student = db.prepare("SELECT * FROM users WHERE id = ? AND role = 'Student'").get(req.params.id)
   if (!student) return res.status(404).json({ error: 'Student not found.' })
   const resume = db.prepare('SELECT original_name, size_bytes, uploaded_at FROM resumes WHERE student_id = ?').get(student.id)
+  const scorecard = db.prepare('SELECT original_name, size_bytes, uploaded_at FROM scorecards WHERE student_id = ?').get(student.id)
   const certRows = db.prepare('SELECT * FROM certificates WHERE student_id = ? ORDER BY issue_date DESC, uploaded_at DESC').all(student.id)
   res.json({
     student: {
       ...publicUser(student),
       hasResume: Boolean(resume),
       resume: resume ? { name: resume.original_name, size: resume.size_bytes, uploadedAt: resume.uploaded_at } : null,
+      hasScorecard: Boolean(scorecard),
+      scorecard: scorecard ? { name: scorecard.original_name, size: scorecard.size_bytes, uploadedAt: scorecard.uploaded_at } : null,
       certificateCount: certRows.length,
       certificates: certRows.map(publicCertificate),
     },
@@ -563,6 +668,17 @@ app.get('/api/tp/students/:id/resume', requireAuth, requireRole('T&P Officer'), 
   if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Resume file is not available on disk.' })
   res.set('Content-Type', 'application/pdf')
   res.set('Content-Disposition', `inline; filename="${path.basename(resume.original_name).replace(/"/g, '')}"`)
+  res.set('X-Content-Type-Options', 'nosniff')
+  return res.sendFile(filePath)
+})
+
+app.get('/api/tp/students/:id/scorecard', requireAuth, requireRole('T&P Officer'), (req, res) => {
+  const scorecard = db.prepare('SELECT original_name, stored_name FROM scorecards WHERE student_id = ?').get(req.params.id)
+  if (!scorecard) return res.status(404).json({ error: 'No scorecard has been uploaded by this student.' })
+  const filePath = path.join(uploadDirectory, scorecard.stored_name)
+  if (!fs.existsSync(filePath)) return res.status(404).json({ error: 'Scorecard file is not available on disk.' })
+  res.set('Content-Type', 'application/pdf')
+  res.set('Content-Disposition', `inline; filename="${path.basename(scorecard.original_name).replace(/"/g, '')}"`)
   res.set('X-Content-Type-Options', 'nosniff')
   return res.sendFile(filePath)
 })
@@ -620,9 +736,51 @@ app.get('/api/tp/certificates/:certificateId/file', requireAuth, requireRole('T&
 })
 
 
+app.get('/api/alumni/profile', requireAuth, requireRole('Alumni'), (req, res) => {
+  const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)
+  res.json({ profile: publicUser(row) })
+})
+
+app.put('/api/alumni/profile', requireAuth, requireRole('Alumni'), (req, res) => {
+  const { name, company, jobTitle, experience, bio, skills, branch, passoutYear, linkedinUrl } = req.body || {}
+  if (!String(name || '').trim()) return res.status(400).json({ error: 'Name is required.' })
+
+  const cleanName = String(name).trim()
+  const cleanCompany = String(company || '').trim()
+  const cleanJobTitle = String(jobTitle || '').trim()
+  const cleanExperience = String(experience || '').trim()
+  const cleanBio = String(bio || '').trim()
+  const cleanBranch = String(branch || 'CSE').trim()
+  const cleanPassoutYear = Math.max(0, Math.min(2100, Number(passoutYear) || 0))
+  const cleanLinkedinUrl = String(linkedinUrl || '').trim()
+  const skillsArray = Array.isArray(skills)
+    ? skills.map((s) => String(s).trim()).filter(Boolean)
+    : String(skills || '').split(',').map((s) => s.trim()).filter(Boolean)
+
+  db.prepare(`
+    UPDATE users 
+    SET name = ?, company = ?, job_title = ?, experience = ?, bio = ?, skills_json = ?, branch = ?, passout_year = ?, linkedin_url = ?
+    WHERE id = ?
+  `).run(
+    cleanName,
+    cleanCompany,
+    cleanJobTitle,
+    cleanExperience,
+    cleanBio,
+    JSON.stringify(skillsArray),
+    cleanBranch,
+    cleanPassoutYear,
+    cleanLinkedinUrl,
+    req.user.id
+  )
+
+  const updated = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)
+  res.json({ profile: publicUser(updated) })
+})
+
 app.get('/api/alumni/mentors', requireAuth, requireRole('Student', 'Alumni'), (_req, res) => {
-  const mentors = db.prepare("SELECT id, name, company, job_title FROM users WHERE role = 'Alumni' ORDER BY name COLLATE NOCASE").all()
-  res.json({ mentors })
+  const rows = db.prepare("SELECT * FROM users WHERE role = 'Alumni' ORDER BY name COLLATE NOCASE").all()
+  res.json({ mentors: rows.map(publicUser) })
 })
 
 app.get('/api/alumni/mentorship-requests', requireAuth, (req, res) => {
@@ -702,10 +860,34 @@ app.post('/api/alumni/referrals', requireAuth, requireRole('Alumni'), (req, res)
 })
 
 app.get('/api/alumni/forum', requireAuth, (_req, res) => {
-  const posts = db.prepare(`SELECT p.id, p.parent_id AS parentId, p.content, p.created_at AS createdAt, u.name AS author,
+  const posts = db.prepare(`SELECT p.id, p.parent_id AS parentId, p.content, p.created_at AS createdAt,
+    u.name AS author, u.role AS authorRole, u.branch AS authorBranch, u.company AS authorCompany, u.job_title AS authorJobTitle,
     (SELECT COUNT(*) FROM forum_posts reply WHERE reply.parent_id = p.id) AS replies
     FROM forum_posts p JOIN users u ON u.id = p.author_id WHERE p.parent_id IS NULL ORDER BY p.created_at DESC`).all()
-  res.json({ posts })
+
+  const allReplies = db.prepare(`SELECT p.id, p.parent_id AS parentId, p.content, p.created_at AS createdAt,
+    u.name AS author, u.role AS authorRole, u.branch AS authorBranch, u.company AS authorCompany, u.job_title AS authorJobTitle
+    FROM forum_posts p JOIN users u ON u.id = p.author_id WHERE p.parent_id IS NOT NULL ORDER BY p.created_at ASC`).all()
+
+  const repliesByParent = {}
+  for (const reply of allReplies) {
+    if (!repliesByParent[reply.parentId]) repliesByParent[reply.parentId] = []
+    repliesByParent[reply.parentId].push(reply)
+  }
+
+  const postsWithReplies = posts.map((post) => ({
+    ...post,
+    repliesList: repliesByParent[post.id] || [],
+  }))
+
+  res.json({ posts: postsWithReplies })
+})
+
+app.get('/api/alumni/forum/:id/replies', requireAuth, (req, res) => {
+  const replies = db.prepare(`SELECT p.id, p.parent_id AS parentId, p.content, p.created_at AS createdAt,
+    u.name AS author, u.role AS authorRole, u.branch AS authorBranch, u.company AS authorCompany, u.job_title AS authorJobTitle
+    FROM forum_posts p JOIN users u ON u.id = p.author_id WHERE p.parent_id = ? ORDER BY p.created_at ASC`).all(req.params.id)
+  res.json({ replies })
 })
 
 app.post('/api/alumni/forum', requireAuth, (req, res) => {
@@ -715,7 +897,359 @@ app.post('/api/alumni/forum', requireAuth, (req, res) => {
   if (parentId && !db.prepare('SELECT id FROM forum_posts WHERE id = ? AND parent_id IS NULL').get(parentId)) return res.status(404).json({ error: 'Discussion not found.' })
   const id = randomUUID()
   db.prepare('INSERT INTO forum_posts (id, author_id, parent_id, content) VALUES (?, ?, ?, ?)').run(id, req.user.id, parentId, content)
-  res.status(201).json({ post: { id, parentId, author: req.user.name, content, replies: 0 } })
+  res.status(201).json({
+    post: db.prepare(`SELECT p.id, p.parent_id AS parentId, p.content, p.created_at AS createdAt,
+      u.name AS author, u.role AS authorRole, u.branch AS authorBranch, u.company AS authorCompany, u.job_title AS authorJobTitle, 0 AS replies
+      FROM forum_posts p JOIN users u ON u.id = p.author_id WHERE p.id = ?`).get(id),
+  })
+})
+
+
+// =============================================================
+// Private Connection Requests & One-to-One Chat Endpoints
+// =============================================================
+
+// Get connection requests for the authenticated user (as student or alumni)
+app.get('/api/connections/requests', requireAuth, requireRole('Student', 'Alumni'), (req, res) => {
+  const isAlumni = req.user.role === 'Alumni'
+  let query = ''
+  if (isAlumni) {
+    query = `
+      SELECT 
+        cr.id, cr.student_id, cr.alumni_id, cr.message, cr.status, cr.created_at, cr.updated_at,
+        s.name AS student_name, s.email AS student_email, s.branch AS student_branch,
+        s.cgpa AS student_cgpa, s.backlogs AS student_backlogs, s.certifications AS student_certifications,
+        s.skills_json AS student_skills_json, s.created_at AS student_registered_at,
+        c.id AS conversation_id
+      FROM connection_requests cr
+      JOIN users s ON s.id = cr.student_id
+      LEFT JOIN conversations c ON (c.connection_request_id = cr.id OR (c.student_id = cr.student_id AND c.alumni_id = cr.alumni_id))
+      WHERE cr.alumni_id = ?
+      ORDER BY cr.created_at DESC
+    `
+  } else {
+    query = `
+      SELECT 
+        cr.id, cr.student_id, cr.alumni_id, cr.message, cr.status, cr.created_at, cr.updated_at,
+        a.name AS alumni_name, a.email AS alumni_email, a.company AS alumni_company, a.job_title AS alumni_job_title,
+        c.id AS conversation_id
+      FROM connection_requests cr
+      JOIN users a ON a.id = cr.alumni_id
+      LEFT JOIN conversations c ON (c.connection_request_id = cr.id OR (c.student_id = cr.student_id AND c.alumni_id = cr.alumni_id))
+      WHERE cr.student_id = ?
+      ORDER BY cr.created_at DESC
+    `
+  }
+  const rows = db.prepare(query).all(req.user.id)
+  const mapped = rows.map((r) => ({
+    id: r.id,
+    studentId: r.student_id,
+    alumniId: r.alumni_id,
+    message: r.message,
+    status: r.status,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    conversationId: r.conversation_id,
+    student: isAlumni ? {
+      name: r.student_name,
+      email: r.student_email,
+      branch: r.student_branch,
+      cgpa: r.student_cgpa,
+      backlogs: r.student_backlogs,
+      certifications: r.student_certifications,
+      skills: parseJson(r.student_skills_json),
+      registeredAt: r.student_registered_at,
+    } : undefined,
+    alumni: !isAlumni ? {
+      name: r.alumni_name,
+      email: r.alumni_email,
+      company: r.alumni_company,
+      jobTitle: r.alumni_job_title,
+    } : undefined,
+  }))
+  res.json({ requests: mapped })
+})
+
+// Student sends connection request to an Alumni
+app.post('/api/connections/requests', requireAuth, requireRole('Student'), (req, res) => {
+  const { alumniId, message = '' } = req.body || {}
+  if (!alumniId) return res.status(400).json({ error: 'Please select an alumni to connect with.' })
+
+  const alumni = db.prepare("SELECT id, name, company, job_title FROM users WHERE id = ? AND role = 'Alumni'").get(alumniId)
+  if (!alumni) return res.status(404).json({ error: 'Alumni profile not found.' })
+
+  // Check for existing request
+  const cleanMessage = String(message || '').trim().slice(0, 1000)
+  const existing = db.prepare('SELECT id, status FROM connection_requests WHERE student_id = ? AND alumni_id = ?').get(req.user.id, alumni.id)
+  if (existing) {
+    if (existing.status === 'Pending') {
+      return res.status(409).json({ error: 'You already have a pending connection request with this alumnus.' })
+    }
+    if (existing.status === 'Accepted') {
+      return res.status(409).json({ error: 'You are already connected with this alumnus.' })
+    }
+    // If previously Rejected, reactivate as Pending with new note
+    db.prepare("UPDATE connection_requests SET status = 'Pending', message = ?, updated_at = datetime('now') WHERE id = ?").run(cleanMessage, existing.id)
+    const updated = db.prepare('SELECT * FROM connection_requests WHERE id = ?').get(existing.id)
+    return res.status(200).json({
+      request: {
+        id: updated.id,
+        studentId: updated.student_id,
+        alumniId: updated.alumni_id,
+        message: updated.message,
+        status: updated.status,
+        createdAt: updated.created_at,
+        updatedAt: updated.updated_at,
+        alumni: {
+          name: alumni.name,
+          company: alumni.company,
+          jobTitle: alumni.job_title,
+        },
+      },
+    })
+  }
+
+  const id = randomUUID()
+
+  db.prepare(`
+    INSERT INTO connection_requests (id, student_id, alumni_id, message, status)
+    VALUES (?, ?, ?, ?, 'Pending')
+  `).run(id, req.user.id, alumni.id, cleanMessage)
+
+  const created = db.prepare('SELECT * FROM connection_requests WHERE id = ?').get(id)
+  res.status(201).json({
+    request: {
+      id: created.id,
+      studentId: created.student_id,
+      alumniId: created.alumni_id,
+      message: created.message,
+      status: created.status,
+      createdAt: created.created_at,
+      updatedAt: created.updated_at,
+      alumni: {
+        name: alumni.name,
+        company: alumni.company,
+        jobTitle: alumni.job_title,
+      },
+    },
+  })
+})
+
+// Alumni accepts or rejects connection request
+app.patch('/api/connections/requests/:id', requireAuth, requireRole('Alumni'), (req, res) => {
+  const { status } = req.body || {}
+  if (!['Accepted', 'Rejected'].includes(status)) {
+    return res.status(400).json({ error: "Status must be 'Accepted' or 'Rejected'." })
+  }
+
+  const request = db.prepare('SELECT * FROM connection_requests WHERE id = ? AND alumni_id = ?').get(req.params.id, req.user.id)
+  if (!request) return res.status(404).json({ error: 'Connection request not found.' })
+
+  let conversationId = null
+  db.transaction(() => {
+    db.prepare("UPDATE connection_requests SET status = ?, updated_at = datetime('now') WHERE id = ?").run(status, request.id)
+
+    if (status === 'Accepted') {
+      const existingConv = db.prepare('SELECT id FROM conversations WHERE student_id = ? AND alumni_id = ?').get(request.student_id, req.user.id)
+      if (existingConv) {
+        conversationId = existingConv.id
+        db.prepare("UPDATE conversations SET connection_request_id = ?, updated_at = datetime('now') WHERE id = ?").run(request.id, conversationId)
+      } else {
+        conversationId = randomUUID()
+        db.prepare(`
+          INSERT INTO conversations (id, connection_request_id, student_id, alumni_id)
+          VALUES (?, ?, ?, ?)
+        `).run(conversationId, request.id, request.student_id, req.user.id)
+      }
+    }
+  })()
+
+  const updated = db.prepare('SELECT * FROM connection_requests WHERE id = ?').get(request.id)
+  res.json({
+    request: {
+      ...updated,
+      conversationId,
+    },
+  })
+})
+
+// List conversations for the logged in user
+app.get('/api/chat/conversations', requireAuth, requireRole('Student', 'Alumni'), (req, res) => {
+  const isAlumni = req.user.role === 'Alumni'
+  const rows = db.prepare(`
+    SELECT 
+      c.id, c.connection_request_id, c.student_id, c.alumni_id, c.created_at, c.updated_at,
+      cr.status AS connection_status,
+      s.name AS student_name, s.branch AS student_branch, s.email AS student_email,
+      a.name AS alumni_name, a.company AS alumni_company, a.job_title AS alumni_job_title, a.email AS alumni_email,
+      (SELECT content FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_content,
+      (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
+      (SELECT sender_id FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_sender_id,
+      (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id AND m.sender_id != ? AND m.read_at IS NULL) AS unread_count
+    FROM conversations c
+    JOIN connection_requests cr ON (cr.id = c.connection_request_id OR (cr.student_id = c.student_id AND cr.alumni_id = c.alumni_id))
+    JOIN users s ON s.id = c.student_id
+    JOIN users a ON a.id = c.alumni_id
+    WHERE (c.student_id = ? OR c.alumni_id = ?) AND cr.status = 'Accepted'
+    ORDER BY COALESCE(last_message_at, c.created_at) DESC
+  `).all(req.user.id, req.user.id, req.user.id)
+
+  const conversations = rows.map((r) => ({
+    id: r.id,
+    connectionRequestId: r.connection_request_id,
+    studentId: r.student_id,
+    alumniId: r.alumni_id,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    unreadCount: r.unread_count || 0,
+    lastMessage: r.last_message_content ? {
+      content: r.last_message_content,
+      createdAt: r.last_message_at,
+      senderId: r.last_message_sender_id,
+    } : null,
+    partner: isAlumni ? {
+      id: r.student_id,
+      name: r.student_name,
+      role: 'Student',
+      detail: r.student_branch,
+      email: r.student_email,
+    } : {
+      id: r.alumni_id,
+      name: r.alumni_name,
+      role: 'Alumni',
+      detail: [r.alumni_job_title, r.alumni_company].filter(Boolean).join(' at '),
+      email: r.alumni_email,
+    },
+  }))
+
+  res.json({ conversations })
+})
+
+// Get messages for a conversation with strict authorization
+app.get('/api/chat/conversations/:id/messages', requireAuth, requireRole('Student', 'Alumni'), (req, res) => {
+  const conversation = db.prepare(`
+    SELECT c.*, cr.status AS connection_status,
+      s.name AS student_name, s.branch AS student_branch,
+      a.name AS alumni_name, a.company AS alumni_company, a.job_title AS alumni_job_title
+    FROM conversations c
+    JOIN connection_requests cr ON (cr.id = c.connection_request_id OR (cr.student_id = c.student_id AND cr.alumni_id = c.alumni_id))
+    JOIN users s ON s.id = c.student_id
+    JOIN users a ON a.id = c.alumni_id
+    WHERE c.id = ?
+  `).get(req.params.id)
+
+  if (!conversation) return res.status(404).json({ error: 'Conversation not found.' })
+
+  // Strict participant identity check
+  if (conversation.student_id !== req.user.id && conversation.alumni_id !== req.user.id) {
+    return res.status(403).json({ error: 'You do not have access to this conversation.' })
+  }
+
+  // Strict connection status check
+  if (conversation.connection_status !== 'Accepted') {
+    return res.status(403).json({ error: 'Messaging is disabled because this connection is not active.' })
+  }
+
+  // Mark unread messages as read
+  db.prepare("UPDATE messages SET read_at = datetime('now') WHERE conversation_id = ? AND sender_id != ? AND read_at IS NULL").run(conversation.id, req.user.id)
+
+  const messages = db.prepare(`
+    SELECT id, conversation_id, sender_id, content, read_at, created_at
+    FROM messages
+    WHERE conversation_id = ?
+    ORDER BY created_at ASC
+  `).all(conversation.id)
+
+  const isAlumni = req.user.role === 'Alumni'
+  const partner = isAlumni ? {
+    id: conversation.student_id,
+    name: conversation.student_name,
+    role: 'Student',
+    detail: conversation.student_branch,
+  } : {
+    id: conversation.alumni_id,
+    name: conversation.alumni_name,
+    role: 'Alumni',
+    detail: [conversation.alumni_job_title, conversation.alumni_company].filter(Boolean).join(' at '),
+  }
+
+  res.json({
+    conversation: {
+      id: conversation.id,
+      partner,
+      createdAt: conversation.created_at,
+    },
+    messages: messages.map((m) => ({
+      id: m.id,
+      conversationId: m.conversation_id,
+      senderId: m.sender_id,
+      content: m.content,
+      readAt: m.read_at,
+      createdAt: m.created_at,
+      isSelf: m.sender_id === req.user.id,
+    })),
+  })
+})
+
+// Send a message in a conversation with strict authorization
+app.post('/api/chat/conversations/:id/messages', requireAuth, requireRole('Student', 'Alumni'), (req, res) => {
+  const content = String(req.body?.content || '').trim()
+  if (!content || content.length > 2000) {
+    return res.status(400).json({ error: 'Message must be between 1 and 2,000 characters.' })
+  }
+
+  const conversation = db.prepare(`
+    SELECT c.*, cr.status AS connection_status
+    FROM conversations c
+    JOIN connection_requests cr ON (cr.id = c.connection_request_id OR (cr.student_id = c.student_id AND cr.alumni_id = c.alumni_id))
+    WHERE c.id = ?
+  `).get(req.params.id)
+
+  if (!conversation) return res.status(404).json({ error: 'Conversation not found.' })
+
+  // Strict participant identity check
+  if (conversation.student_id !== req.user.id && conversation.alumni_id !== req.user.id) {
+    return res.status(403).json({ error: 'You do not have access to this conversation.' })
+  }
+
+  // Strict connection status check
+  if (conversation.connection_status !== 'Accepted') {
+    return res.status(403).json({ error: 'Messaging is disabled because this connection is not active.' })
+  }
+
+  const messageId = randomUUID()
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO messages (id, conversation_id, sender_id, content)
+      VALUES (?, ?, ?, ?)
+    `).run(messageId, conversation.id, req.user.id, content)
+
+    db.prepare("UPDATE conversations SET updated_at = datetime('now') WHERE id = ?").run(conversation.id)
+  })()
+
+  const saved = db.prepare('SELECT * FROM messages WHERE id = ?').get(messageId)
+  res.status(201).json({
+    message: {
+      id: saved.id,
+      conversationId: saved.conversation_id,
+      senderId: saved.sender_id,
+      content: saved.content,
+      readAt: saved.read_at,
+      createdAt: saved.created_at,
+      isSelf: true,
+    },
+  })
+})
+
+// Mark conversation messages as read
+app.post('/api/chat/conversations/:id/read', requireAuth, requireRole('Student', 'Alumni'), (req, res) => {
+  const conversation = db.prepare('SELECT student_id, alumni_id FROM conversations WHERE id = ?').get(req.params.id)
+  if (!conversation) return res.status(404).json({ error: 'Conversation not found.' })
+  if (conversation.student_id !== req.user.id && conversation.alumni_id !== req.user.id) {
+    return res.status(403).json({ error: 'Access denied.' })
+  }
+  db.prepare("UPDATE messages SET read_at = datetime('now') WHERE conversation_id = ? AND sender_id != ? AND read_at IS NULL").run(req.params.id, req.user.id)
+  res.json({ success: true })
 })
 
 app.use((error, _req, res, _next) => {

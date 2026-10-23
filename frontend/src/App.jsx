@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react'
 import { apiRequest, clearSession, downloadProtectedFile, getSession, protectedFileUrl, saveSession } from './api'
+import {
+  AlumniEditProfileTabPanel,
+  AlumniProfileTopCard,
+  ConnectModal,
+  ConnectionRequestsView,
+  PrivateChatView,
+} from './ChatComponents'
 import './App.css'
 
 const branches = ['All branches', 'CSE', 'IT', 'ECE', 'EEE', 'MECH', 'CIVIL', 'AIDS', 'AIML']
@@ -22,13 +29,19 @@ function BrandMark() {
   )
 }
 
-function Header({ user, onSignOut }) {
+function Header({ user, onSignOut, activeAlumniTab, onSelectAlumniTab }) {
+  const isAlumniProfileActive = window.location.pathname === '/alumni' && (activeAlumniTab === 'Profile' || activeAlumniTab === 'My Profile' || (typeof window !== 'undefined' && window.location.search.includes('tab=profile')))
+  const isAlumniHubActive = window.location.pathname === '/alumni' && !isAlumniProfileActive
+
   const roleLinks = user?.role === 'Student'
     ? [{ label: 'My Dashboard', href: '/student' }, { label: 'Alumni Hub', href: '/alumni' }]
     : user?.role === 'T&P Officer'
       ? [{ label: 'T&P Center', href: '/tp' }, { label: 'Create Drive', href: '/tp/create' }]
       : user?.role === 'Alumni'
-        ? [{ label: 'Alumni Hub', href: '/alumni' }]
+        ? [
+            { label: 'Alumni Hub', href: '/alumni', isSpecialActive: isAlumniHubActive },
+            { label: 'Profile', href: '/alumni?tab=profile', isSpecialActive: isAlumniProfileActive },
+          ]
         : []
 
   return (
@@ -53,9 +66,36 @@ function Header({ user, onSignOut }) {
         </div>
       </header>
       <nav className="site-nav" aria-label="Main navigation">
-        {[{ label: 'Drives', href: '/' }, ...roleLinks].map((item) => (
-          <a className={window.location.pathname === item.href ? 'active' : ''} href={item.href} key={item.href}>{item.label}</a>
-        ))}
+        {[{ label: 'Drives', href: '/' }, ...roleLinks].map((item) => {
+          const isActive = item.isSpecialActive !== undefined
+            ? item.isSpecialActive
+            : window.location.pathname === item.href
+
+          function handleClick(e) {
+            if (user?.role === 'Alumni' && window.location.pathname === '/alumni') {
+              if (item.href === '/alumni?tab=profile') {
+                e.preventDefault()
+                window.history.replaceState(null, '', '/alumni?tab=profile')
+                if (onSelectAlumniTab) onSelectAlumniTab('Profile')
+              } else if (item.href === '/alumni') {
+                e.preventDefault()
+                window.history.replaceState(null, '', '/alumni')
+                if (onSelectAlumniTab) onSelectAlumniTab('Connection Requests')
+              }
+            }
+          }
+
+          return (
+            <a
+              className={isActive ? 'active' : ''}
+              href={item.href}
+              key={item.label}
+              onClick={handleClick}
+            >
+              {item.label}
+            </a>
+          )
+        })}
       </nav>
     </>
   )
@@ -214,11 +254,123 @@ function SkillSection({ title, skills, tone = 'blue' }) {
   )
 }
 
-function StudentDashboard({ profile, resume, certificates = [], onSaveProfile, onSaveResume, onViewResume, onCreateCertificate, onUpdateCertificate, onDeleteCertificate, onViewCertificate, applications: applicationData }) {
+function SemesterGpaModal({ currentSemGpa = {}, onClose, onSave }) {
+  const [semValues, setSemValues] = useState(() => {
+    const initial = {}
+    for (let i = 1; i <= 8; i++) {
+      initial[i] = currentSemGpa[i] !== undefined && currentSemGpa[i] !== null ? String(currentSemGpa[i]) : ''
+    }
+    return initial
+  })
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  let total = 0
+  let count = 0
+  for (let i = 1; i <= 8; i++) {
+    const val = semValues[i]
+    if (val !== '' && !isNaN(val)) {
+      const num = Number(val)
+      if (num >= 0 && num <= 10) {
+        total += num
+        count++
+      }
+    }
+  }
+  const computedCgpa = count > 0 ? (total / count).toFixed(2) : null
+
+  function handleChange(sem, val) {
+    setSemValues((prev) => ({ ...prev, [sem]: val }))
+  }
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setSaving(true)
+    setError('')
+    try {
+      const payload = {}
+      for (let i = 1; i <= 8; i++) {
+        const val = semValues[i]
+        if (val !== '' && !isNaN(val)) {
+          const num = Number(val)
+          if (num < 0 || num > 10) {
+            throw new Error(`Semester ${i} GPA must be between 0 and 10.`)
+          }
+          payload[i] = num
+        }
+      }
+      await onSave(payload)
+      onClose()
+    } catch (err) {
+      setError(err.message)
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="sem-modal-backdrop" onClick={onClose} role="presentation">
+      <div className="sem-modal-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <header className="sem-modal-header">
+          <div>
+            <p className="eyebrow-dark">ACADEMIC RECORD</p>
+            <h2>Update Semester-wise CGPA</h2>
+          </div>
+          <button aria-label="Close modal" className="quiet-button" onClick={onClose} type="button">✕</button>
+        </header>
+
+        <p className="sem-modal-intro">
+          Enter the SGPA/CGPA numbers for each completed semester. The cumulative CGPA will be automatically updated as the average.
+        </p>
+
+        <form onSubmit={handleSubmit}>
+          <div className="sem-inputs-grid">
+            {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
+              <div key={sem} className="sem-input-group">
+                <label htmlFor={`sem-input-${sem}`}>Semester {sem} SGPA</label>
+                <input
+                  id={`sem-input-${sem}`}
+                  type="number"
+                  min="0"
+                  max="10"
+                  step="0.01"
+                  placeholder="e.g. 8.50"
+                  value={semValues[sem]}
+                  onChange={(e) => handleChange(sem, e.target.value)}
+                />
+              </div>
+            ))}
+          </div>
+
+          <div className="sem-summary-box">
+            <span>Calculated Cumulative CGPA</span>
+            <strong>
+              {computedCgpa !== null ? `${computedCgpa} / 10.0` : 'Not entered'}
+            </strong>
+          </div>
+
+          {error && <p className="form-error" role="alert" style={{ marginBottom: '14px' }}>{error}</p>}
+
+          <div className="sem-modal-actions">
+            <button className="quiet-button" onClick={onClose} type="button">Cancel</button>
+            <button className="primary-button compact-button" disabled={saving} type="submit">
+              {saving ? 'Saving…' : 'Save Semester GPAs'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function StudentDashboard({ profile, resume, scorecard, certificates = [], onSaveProfile, onSaveResume, onViewResume, onSaveScorecard, onViewScorecard, onUpdateSemGpa, onCreateCertificate, onUpdateCertificate, onDeleteCertificate, onViewCertificate, applications: applicationData }) {
   const [editing, setEditing] = useState(false)
   const [selectedResume, setSelectedResume] = useState(null)
   const [resumeError, setResumeError] = useState('')
   const [notice, setNotice] = useState('')
+  const [showSemModal, setShowSemModal] = useState(false)
+  const [selectedScorecard, setSelectedScorecard] = useState(null)
+  const [scorecardError, setScorecardError] = useState('')
+  const [replacingScorecard, setReplacingScorecard] = useState(false)
   const [showCertificateForm, setShowCertificateForm] = useState(false)
   const [certificateForm, setCertificateForm] = useState({
     name: '',
@@ -370,12 +522,41 @@ function StudentDashboard({ profile, resume, certificates = [], onSaveProfile, o
     }
   }
 
+  function selectScorecard(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!file.name.toLowerCase().endsWith('.pdf') || (file.type && file.type !== 'application/pdf')) {
+      setScorecardError('Choose a consolidated PDF scorecard.')
+      return
+    }
+    if (file.size > 10 * 1024 * 1024) {
+      setScorecardError('Scorecard must be 10 MB or smaller.')
+      return
+    }
+    setSelectedScorecard(file)
+    setScorecardError('')
+    setNotice('')
+  }
+
+  async function uploadScorecard() {
+    if (!selectedScorecard) return
+    try {
+      await onSaveScorecard(selectedScorecard)
+      setSelectedScorecard(null)
+      setReplacingScorecard(false)
+      setNotice('All-semesters scorecard PDF uploaded successfully.')
+    } catch (error) {
+      setScorecardError(error.message)
+    }
+  }
+
   return (
     <main className="workspace-content">
+      {notice && <div className="inline-notice" style={{ marginBottom: '18px' }}>{notice}</div>}
       <div className="workspace-heading">
         <div>
           <p className="eyebrow-dark">STUDENT WORKSPACE</p>
-          <h1>Hi {profile.name} — your placement cockpit</h1>
+          <h1>Hi {profile.name}</h1>
           <p>Keep your profile accurate: every score and eligibility gate reads from it.</p>
         </div>
       </div>
@@ -412,7 +593,87 @@ function StudentDashboard({ profile, resume, certificates = [], onSaveProfile, o
                 <div><dt>Backlogs</dt><dd>{profile.backlogs}</dd></div>
                 <div><dt>Certificates</dt><dd>{certificates.length}</dd></div>
               </dl>
-              <p className="section-label">Skills</p>
+
+              <div className="sem-gpa-container">
+                <div className="sem-gpa-header">
+                  <div>
+                    <h3>Semester-wise CGPA</h3>
+                  </div>
+                  <button className="quiet-button" onClick={() => setShowSemModal(true)} type="button" style={{ fontSize: '12px', minHeight: '30px', padding: '4px 10px' }}>
+                    ✏️ Update sem-wise numbers
+                  </button>
+                </div>
+                {profile.semGpa && Object.keys(profile.semGpa).filter((k) => profile.semGpa[k] !== undefined && profile.semGpa[k] !== null).length > 0 ? (
+                  <div className="sem-gpa-grid">
+                    {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
+                      profile.semGpa[sem] !== undefined && profile.semGpa[sem] !== null ? (
+                        <div className="sem-chip" key={sem}>
+                          <span className="sem-chip-num">Sem {sem}</span>
+                          <span className="sem-chip-val">{Number(profile.semGpa[sem]).toFixed(2)}</span>
+                        </div>
+                      ) : null
+                    ))}
+                  </div>
+                ) : (
+                  <p className="sem-gpa-empty">No semester marks recorded yet. Click 'Update sem-wise numbers' to add your semester GPAs.</p>
+                )}
+              </div>
+
+              <div className="scorecard-verification-card">
+                <div className="card-top">
+                  <div>
+                    <h3>All-Semesters Scorecard (PDF Verification)</h3>
+                    <p className="subtitle">Upload a single PDF of all semester scorecards to verify your CGPA.</p>
+                  </div>
+                  {scorecard && !replacingScorecard && (
+                    <span className="status-pill selected" style={{ fontSize: '11px', padding: '3px 8px' }}>
+                      ✓ Attached
+                    </span>
+                  )}
+                </div>
+
+                {scorecard && !replacingScorecard ? (
+                  <div className="scorecard-file-row">
+                    <div className="scorecard-file-info">
+                      <span className="file-icon" aria-hidden="true">📄</span>
+                      <div className="scorecard-file-details">
+                        <strong title={scorecard.name}>{scorecard.name}</strong>
+                        <small>Uploaded {formatDate(scorecard.uploadedAt)} · {(scorecard.size / 1024).toFixed(1)} KB</small>
+                      </div>
+                    </div>
+                    <div className="scorecard-actions">
+                      <button className="primary-button compact-button" onClick={onViewScorecard} type="button">
+                        View scorecard PDF ↗
+                      </button>
+                      <button className="quiet-button" onClick={() => setReplacingScorecard(true)} type="button">
+                        Replace
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="scorecard-upload-area">
+                    <label className="upload-zone">
+                      <input accept="application/pdf,.pdf" onChange={selectScorecard} type="file" />
+                      <span className="upload-symbol" aria-hidden="true">↑</span>
+                      <span>{selectedScorecard?.name || 'Choose consolidated PDF scorecard'}</span>
+                      <small>{selectedScorecard ? 'Ready to upload' : 'Single PDF with all sem marksheets (up to 10 MB)'}</small>
+                    </label>
+                    <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+                      <button className="primary-button compact-button" disabled={!selectedScorecard} onClick={uploadScorecard} type="button">
+                        Upload scorecard PDF
+                      </button>
+                      {replacingScorecard && (
+                        <button className="quiet-button" onClick={() => { setReplacingScorecard(false); setSelectedScorecard(null); }} type="button">
+                          Cancel
+                        </button>
+                      )}
+                    </div>
+                    {scorecardError && <p className="form-error" role="alert" style={{ marginTop: '8px' }}>{scorecardError}</p>}
+                  </div>
+                )}
+              </div>
+
+              <p className="section-label" style={{ marginTop: '20px' }}>Skills</p>
               <div className="skill-list">{profile.skills.map((skill) => <span className="skill-tag" key={skill}>{skill}</span>)}</div>
             </>
           )}
@@ -528,6 +789,17 @@ function StudentDashboard({ profile, resume, certificates = [], onSaveProfile, o
           })}
         </div> : <div className="empty-state application-empty"><h2>No applications yet</h2><p>Your applications and match breakdowns will appear here after you apply to a drive.</p><a className="primary-link" href="/">Explore open drives</a></div>}
       </section>
+
+      {showSemModal && (
+        <SemesterGpaModal
+          currentSemGpa={profile.semGpa || {}}
+          onClose={() => setShowSemModal(false)}
+          onSave={async (semGpa) => {
+            await onUpdateSemGpa(semGpa)
+            setNotice('Semester-wise GPAs updated successfully.')
+          }}
+        />
+      )}
     </main>
   )
 }
@@ -597,7 +869,7 @@ function CertificateViewerModal({ activeCertificate, onClose, onDownload }) {
   )
 }
 
-function TPStudentDetails({ student, onViewCertificate, onDownloadCertificate, onViewResume, onDownloadResume }) {
+function TPStudentDetails({ student, onViewCertificate, onDownloadCertificate, onViewResume, onDownloadResume, onViewScorecard, onDownloadScorecard }) {
   const certCount = student.certificates ? student.certificates.length : 0
 
   return (
@@ -632,8 +904,28 @@ function TPStudentDetails({ student, onViewCertificate, onDownloadCertificate, o
             <div><dt>Branch</dt><dd>{student.branch}</dd></div>
             <div><dt>CGPA</dt><dd>{Number(student.cgpa).toFixed(2)} / 10.0</dd></div>
             <div><dt>Active backlogs</dt><dd>{student.backlogs}</dd></div>
+            <div><dt>Scorecard</dt><dd>{student.hasScorecard ? <span style={{ color: 'var(--green, #15803d)' }}>✓ Uploaded</span> : <span className="resume-missing">Not uploaded</span>}</dd></div>
             <div><dt>Certificates</dt><dd>{certCount}</dd></div>
           </dl>
+
+          {student.semGpa && Object.keys(student.semGpa).filter((k) => student.semGpa[k] !== undefined && student.semGpa[k] !== null).length > 0 && (
+            <div className="sem-gpa-container" style={{ margin: '14px 0' }}>
+              <div className="sem-gpa-header">
+                <h3>Semester-wise GPAs</h3>
+              </div>
+              <div className="sem-gpa-grid">
+                {[1, 2, 3, 4, 5, 6, 7, 8].map((sem) => (
+                  student.semGpa[sem] !== undefined && student.semGpa[sem] !== null ? (
+                    <div className="sem-chip" key={sem}>
+                      <span className="sem-chip-num">Sem {sem}</span>
+                      <span className="sem-chip-val">{Number(student.semGpa[sem]).toFixed(2)}</span>
+                    </div>
+                  ) : null
+                ))}
+              </div>
+            </div>
+          )}
+
           <p className="section-label">Skills</p>
           <div className="skill-list">
             {student.skills && student.skills.length > 0 ? (
@@ -676,6 +968,40 @@ function TPStudentDetails({ student, onViewCertificate, onDownloadCertificate, o
               <p>No resume uploaded by this student yet.</p>
             </div>
           )}
+
+          <div style={{ marginTop: '24px', paddingTop: '18px', borderTop: '1px solid #edf0f2' }}>
+            <div className="panel-heading" style={{ marginBottom: '12px' }}>
+              <div>
+                <h2>All-Sem Scorecard</h2>
+                <p>{student.scorecard ? `Current file: ${student.scorecard.name}` : 'No scorecard uploaded'}</p>
+              </div>
+            </div>
+            {student.scorecard ? (
+              <div style={{ display: 'grid', gap: '14px' }}>
+                <div className="resume-info-card">
+                  <span className="upload-symbol" aria-hidden="true">📑</span>
+                  <div>
+                    <strong>{student.scorecard.name}</strong>
+                    <small style={{ display: 'block', color: 'var(--muted)', marginTop: '2px' }}>
+                      Uploaded {formatDate(student.scorecard.uploadedAt)} · {(student.scorecard.size / 1024).toFixed(1)} KB
+                    </small>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                  <button className="primary-button compact-button" onClick={onViewScorecard} type="button">
+                    View scorecard PDF ↗
+                  </button>
+                  <button className="quiet-button" onClick={onDownloadScorecard} type="button">
+                    Download
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="empty-state" style={{ padding: '20px' }}>
+                <p>No consolidated scorecard PDF uploaded by student yet.</p>
+              </div>
+            )}
+          </div>
         </section>
       </div>
 
@@ -904,7 +1230,14 @@ function TPCommandCenter({ driveData, studentList = [] }) {
                       <small>{student.email}</small>
                     </td>
                     <td>{student.branch}</td>
-                    <td>{Number(student.cgpa).toFixed(2)}</td>
+                    <td>
+                      <strong>{Number(student.cgpa).toFixed(2)}</strong>
+                      {student.hasScorecard && (
+                        <span className="status-pill selected" style={{ display: 'block', width: 'fit-content', fontSize: '10px', padding: '2px 6px', marginTop: '4px' }}>
+                          ✓ Scorecard
+                        </span>
+                      )}
+                    </td>
                     <td>{student.backlogs}</td>
                     <td>
                       <strong>{student.certificateCount || 0}</strong>{' '}
@@ -1052,29 +1385,102 @@ function ApplicantReview({ drive, applicants, onUpdateStatus, onViewResume }) {
   )
 }
 
-function AlumniHub({ driveData, user, mentors, mentorshipRequests, interviewSlots, referrals, forumPosts, onRequestMentorship, onUpdateMentorshipRequest, onBookInterview, onCreateInterviewSlot, onRequestReferral, onCreateForumPost }) {
-  const [tab, setTab] = useState('Mentorship')
-  const [message, setMessage] = useState('')
-  const [replyTo, setReplyTo] = useState(null)
-  const [actionError, setActionError] = useState('')
-  const [slotFormOpen, setSlotFormOpen] = useState(false)
+function AlumniHub({
+  driveData,
+  user,
+  mentors,
+  mentorshipRequests,
+  _interviewSlots,
+  referrals,
+  forumPosts,
+  _onRequestMentorship,
+  onUpdateMentorshipRequest,
+  _onBookInterview,
+  _onCreateInterviewSlot,
+  onRequestReferral,
+  onCreateForumPost,
+  onFetchPostReplies,
+  connectionRequests = [],
+  conversations = [],
+  activeChatConversationId = null,
+  setActiveChatConversationId,
+  onSendConnectionRequest,
+  onUpdateConnectionRequestStatus,
+  onRefreshConversations,
+  _onRefreshConnectionRequests,
+  onUpdateAlumniProfile,
+  activeAlumniTab,
+  onSelectAlumniTab,
+}) {
   const isAlumni = user.role === 'Alumni'
-  const outgoingRequests = mentorshipRequests.filter((request) => request.student_id === user.id)
+  const [internalTab, setInternalTab] = useState(() => (
+    typeof window !== 'undefined' && window.location.search.includes('tab=profile')
+      ? 'Profile'
+      : isAlumni
+        ? 'Connection Requests'
+        : 'Mentorship'
+  ))
+  const tab = activeAlumniTab || internalTab
+  const [connectModalAlumni, setConnectModalAlumni] = useState(null)
+  const [profileTabMode, setProfileTabMode] = useState(() => (
+    typeof window !== 'undefined' && (window.location.search.includes('edit=true') || window.location.search.includes('tab=edit-profile'))
+      ? 'edit'
+      : 'view'
+  ))
+  const [actionError, setActionError] = useState('')
   const incomingRequests = mentorshipRequests.filter((request) => request.alumni_id === user.id)
-  const tabs = ['Mentorship', 'Mock interviews', 'Referral desk', 'Forum']
 
-  async function postMessage(event) {
-    event.preventDefault()
-    if (!message.trim()) return
-    try {
-      await onCreateForumPost(message.trim(), replyTo)
-      setMessage('')
-      setReplyTo(null)
-      setActionError('')
-    } catch (error) {
-      setActionError(error.message)
+  const unreadTotal = conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0)
+  const pendingRequestsCount = connectionRequests.filter((r) => r.status === 'Pending').length
+
+  function handleTabChange(nextTab) {
+    setInternalTab(nextTab)
+    if (onSelectAlumniTab) {
+      onSelectAlumniTab(nextTab)
+    }
+    if (nextTab === 'Profile' || nextTab === 'My Profile') {
+      window.history.replaceState(null, '', '/alumni?tab=profile')
+    } else if (window.location.search.includes('tab=profile')) {
+      window.history.replaceState(null, '', '/alumni')
     }
   }
+
+  function handleOpenEditProfile() {
+    handleTabChange('Profile')
+    setProfileTabMode('edit')
+    if (typeof window !== 'undefined') {
+      window.scrollTo({ top: 0, behavior: 'smooth' })
+    }
+  }
+
+  const tabs = isAlumni
+    ? [
+        pendingRequestsCount > 0 ? `Connection Requests (${pendingRequestsCount})` : 'Connection Requests',
+        unreadTotal > 0 ? `Messages (${unreadTotal})` : 'Messages',
+        'Mentorship',
+        'Referral desk',
+        'Forum',
+        'Profile',
+      ]
+    : [
+        'Mentorship',
+        'My Connections',
+        unreadTotal > 0 ? `Messages (${unreadTotal})` : 'Messages',
+        'Referral desk',
+        'Forum',
+      ]
+
+  function openChatWithConversation(convId) {
+    let targetId = convId
+    if (!targetId && conversations.length > 0) {
+      targetId = conversations[0].id
+    }
+    if (setActiveChatConversationId && targetId) {
+      setActiveChatConversationId(targetId)
+    }
+    handleTabChange(unreadTotal > 0 ? `Messages (${unreadTotal})` : 'Messages')
+  }
+
 
   return (
     <main className="workspace-content alumni-workspace">
@@ -1082,18 +1488,203 @@ function AlumniHub({ driveData, user, mentors, mentorshipRequests, interviewSlot
         <div><p className="eyebrow">ALUMNI CONNECT HUB</p><h1>Welcome back to campus</h1><p>Share what you’ve learned. Help the next class take its next step.</p></div>
         <a className="hero-action" href="/">Browse open drives ↗</a>
       </section>
-      <div className="alumni-stats"><span><strong>{mentors.length}</strong> alumni profiles</span><span><strong>{interviewSlots.length}</strong> open interview slots</span><span><strong>{driveData.length}</strong> open drives</span></div>
+
+      <div className="alumni-stats"><span><strong>{mentors.length}</strong> alumni profiles</span><span><strong>{connectionRequests.filter((r) => r.status === 'Accepted').length}</strong> connections</span><span><strong>{referrals.length}</strong> referral threads</span><span><strong>{driveData.length}</strong> open drives</span></div>
       <div className="tab-bar" role="tablist" aria-label="Alumni tools">
-        {tabs.map((item) => <button aria-selected={tab === item} className={tab === item ? 'workspace-tab active' : 'workspace-tab'} key={item} onClick={() => setTab(item)} role="tab" type="button">{item}</button>)}
+        {tabs.map((item) => (
+          <button
+            aria-selected={tab === item || (item.startsWith('Messages') && tab.startsWith('Messages')) || (item.startsWith('Connection Requests') && tab.startsWith('Connection Requests'))}
+            className={(tab === item || (item.startsWith('Messages') && tab.startsWith('Messages')) || (item.startsWith('Connection Requests') && tab.startsWith('Connection Requests'))) ? 'workspace-tab active' : 'workspace-tab'}
+            key={item}
+            onClick={() => handleTabChange(item)}
+            role="tab"
+            type="button"
+          >
+            {item}
+          </button>
+        ))}
       </div>
 
-      {tab === 'Mentorship' && <section className="alumni-content"><div className="section-heading-row"><div><p className="eyebrow-dark">PEER NETWORK</p><h2>{isAlumni ? 'Mentorship requests' : 'Find a mentor'}</h2></div><span className="muted-count">{isAlumni ? `${incomingRequests.length} requests received` : `${outgoingRequests.length} requests sent`}</span></div>{isAlumni ? <div className="slot-list">{incomingRequests.map((request) => <article className="slot-row" key={request.id}><div><p className="eyebrow-dark">{request.status}</p><h3>{request.student_name}</h3><p>{request.message || 'Requested a mentorship connection.'}</p></div><div className="action-pair"><button className="quiet-button" disabled={request.status !== 'Pending'} onClick={async () => { try { await onUpdateMentorshipRequest(request.id, 'Accepted') } catch (error) { setActionError(error.message) } }} type="button">Accept</button><button className="quiet-button" disabled={request.status !== 'Pending'} onClick={async () => { try { await onUpdateMentorshipRequest(request.id, 'Declined') } catch (error) { setActionError(error.message) } }} type="button">Decline</button></div></article>)}{incomingRequests.length === 0 && <div className="empty-state"><h2>No mentorship requests yet</h2><p>Student requests will appear here.</p></div>}</div> : <div className="mentor-grid">{mentors.filter((mentor) => mentor.id !== user.id).map((mentor) => { const request = outgoingRequests.find((item) => item.alumni_id === mentor.id); return <article className="mentor-card" key={mentor.id}><div className="mentor-avatar">{mentor.name.split(' ').map((part) => part[0]).join('').slice(0, 2)}</div><p className="eyebrow-dark">{mentor.company || 'Alumni'}</p><h3>{mentor.name}</h3><p className="mentor-role">{mentor.job_title || 'Alumni mentor'}</p><button className="quiet-button" disabled={Boolean(request)} onClick={async () => { try { await onRequestMentorship(mentor.id, '') } catch (error) { setActionError(error.message) } }} type="button">{request ? request.status : 'Request mentorship'}</button></article> })}{mentors.length <= 1 && <div className="empty-state"><h2>No alumni profiles yet</h2><p>Alumni who create an account will be available to connect here.</p></div>}</div>}{actionError && <p className="form-error" role="alert">{actionError}</p>}</section>}
+      <div className={`alumni-hub-grid-layout${(!isAlumni || tab.startsWith('Messages') || tab === 'Profile') ? ' full-width' : ''}`}>
+        <div className="alumni-hub-main-column">
+          {(tab.startsWith('Connection Requests') || tab === 'My Connections') && (
+            <ConnectionRequestsView
+              connectionRequests={connectionRequests}
+              onOpenChat={openChatWithConversation}
+              onUpdateRequestStatus={onUpdateConnectionRequestStatus}
+              user={user}
+            />
+          )}
 
-      {tab === 'Mock interviews' && <section className="alumni-content"><div className="section-heading-row"><div><p className="eyebrow-dark">PRACTICE TOGETHER</p><h2>{isAlumni ? 'Your interview slots' : 'Mock interview slots'}</h2></div>{isAlumni && <button className="quiet-button" onClick={() => setSlotFormOpen(!slotFormOpen)} type="button">{slotFormOpen ? 'Cancel' : '＋ Add slot'}</button>}</div>{slotFormOpen && <form className="slot-create-form" onSubmit={async (event) => { event.preventDefault(); const fields = new FormData(event.currentTarget); try { await onCreateInterviewSlot({ topic: fields.get('topic'), startsAt: fields.get('startsAt'), mode: 'Video call' }); setSlotFormOpen(false); setActionError('') } catch (error) { setActionError(error.message) } }}><label>Interview focus<input name="topic" placeholder="System design, product case…" required /></label><label>Start time<input name="startsAt" required type="datetime-local" /></label><button className="primary-button compact-button" type="submit">Publish slot</button></form>}<div className="slot-list">{interviewSlots.filter((slot) => !isAlumni || slot.alumni_id === user.id).map((slot) => <article className="slot-row" key={slot.id}><div><p className="eyebrow-dark">{slot.topic}</p><h3>{slot.alumni_name}</h3><p>{new Date(slot.starts_at).toLocaleString()} <span>·</span> {slot.mode} {slot.company ? `· ${slot.company}` : ''}</p></div>{!isAlumni && <button className="quiet-button" onClick={async () => { try { await onBookInterview(slot.id) } catch (error) { setActionError(error.message) } }} type="button">Book slot</button>}</article>)}{interviewSlots.length === 0 && <div className="empty-state"><h2>No interview slots available</h2><p>Alumni can publish a time for a mock interview here.</p></div>}</div>{actionError && <p className="form-error" role="alert">{actionError}</p>}</section>}
+          {tab.startsWith('Messages') && (
+            <PrivateChatView
+              activeConversationId={activeChatConversationId}
+              conversations={conversations}
+              onRefreshConversations={onRefreshConversations}
+              onSelectConversation={setActiveChatConversationId}
+              user={user}
+            />
+          )}
 
-      {tab === 'Referral desk' && <ReferralDesk driveData={driveData} referrals={referrals} isAlumni={isAlumni} onRequestReferral={onRequestReferral} />}
+          {tab === 'Mentorship' && (
+            <section className="alumni-content">
+              <div className="section-heading-row">
+                <div><p className="eyebrow-dark">PEER NETWORK</p><h2>{isAlumni ? 'Mentorship requests' : 'Find alumni & mentors'}</h2></div>
+                <span className="muted-count">{isAlumni ? `${incomingRequests.length} requests received` : `${mentors.length} alumni available`}</span>
+              </div>
+              {isAlumni ? (
+                <div className="slot-list">
+                  {incomingRequests.map((request) => (
+                    <article className="slot-row" key={request.id}>
+                      <div><p className="eyebrow-dark">{request.status}</p><h3>{request.student_name}</h3><p>{request.message || 'Requested a mentorship connection.'}</p></div>
+                      <div className="action-pair">
+                        <button className="quiet-button" disabled={request.status !== 'Pending'} onClick={async () => { try { await onUpdateMentorshipRequest(request.id, 'Accepted') } catch (error) { setActionError(error.message) } }} type="button">Accept</button>
+                        <button className="quiet-button" disabled={request.status !== 'Pending'} onClick={async () => { try { await onUpdateMentorshipRequest(request.id, 'Declined') } catch (error) { setActionError(error.message) } }} type="button">Decline</button>
+                      </div>
+                    </article>
+                  ))}
+                  {incomingRequests.length === 0 && <div className="empty-state"><h2>No mentorship requests yet</h2><p>Student requests will appear here.</p></div>}
+                </div>
+              ) : (
+                <div className="mentor-grid">
+                  {mentors.filter((mentor) => mentor.id !== user.id).map((mentor) => {
+                    const connection = connectionRequests.find((cr) => cr.alumniId === mentor.id || cr.alumni_id === mentor.id)
+                    const conv = conversations.find((c) => c.partner?.id === mentor.id || c.alumniId === mentor.id || c.id === connection?.conversationId)
+                    return (
+                      <article className="mentor-card" key={mentor.id}>
+                        <div className="mentor-avatar">{mentor.name.split(' ').map((part) => part[0]).join('').slice(0, 2)}</div>
+                        <p className="eyebrow-dark">{mentor.company || 'Alumni'}</p>
+                        <h3>{mentor.name}</h3>
+                        <p className="mentor-role">{mentor.job_title || 'Alumni mentor'}</p>
+                        {mentor.experience ? <span className="mentor-exp-tag">💼 {mentor.experience}</span> : null}
+                        {mentor.bio ? <p className="mentor-card-bio">{mentor.bio}</p> : null}
+                        {Array.isArray(mentor.skills) && mentor.skills.length > 0 ? (
+                          <div className="skill-list compact-skills">
+                            {mentor.skills.slice(0, 3).map((s) => <span className="skill-tag" key={s}>{s}</span>)}
+                          </div>
+                        ) : null}
+                        <div className="mentor-card-actions">
+                          {connection?.status === 'Accepted' ? (
+                            <button
+                              className="message-action-btn"
+                              onClick={() => openChatWithConversation(conv?.id || connection?.conversationId)}
+                              type="button"
+                            >
+                              💬 Message
+                            </button>
+                          ) : connection?.status === 'Pending' ? (
+                            <button className="quiet-button connection-pending-btn" disabled type="button">
+                              ⏳ Request Pending
+                            </button>
+                          ) : connection?.status === 'Rejected' ? (
+                            <button
+                              className="primary-button compact-button"
+                              onClick={() => setConnectModalAlumni(mentor)}
+                              type="button"
+                            >
+                              Re-connect
+                            </button>
+                          ) : (
+                            <button
+                              className="primary-button compact-button"
+                              onClick={() => setConnectModalAlumni(mentor)}
+                              type="button"
+                            >
+                              Connect
+                            </button>
+                          )}
+                        </div>
+                      </article>
+                    )
+                  })}
+                  {mentors.length <= 1 && <div className="empty-state"><h2>No alumni profiles yet</h2><p>Alumni who create an account will be available to connect here.</p></div>}
+                </div>
+              )}
+              {actionError && <p className="form-error" role="alert">{actionError}</p>}
+            </section>
+          )}
 
-      {tab === 'Forum' && <section className="alumni-content"><div className="section-heading-row"><div><p className="eyebrow-dark">CAMPUS CONVERSATIONS</p><h2>Alumni forum</h2></div><span className="muted-count">{forumPosts.length} discussions</span></div><form className="forum-compose" onSubmit={postMessage}><label className="sr-only" htmlFor="forum-post">Start a discussion</label><textarea id="forum-post" onChange={(event) => setMessage(event.target.value)} placeholder={replyTo ? 'Write your reply…' : 'Share a question, insight, or opportunity…'} rows="2" value={message} /><button className="primary-button compact-button" type="submit">{replyTo ? 'Reply' : 'Post'}</button></form>{actionError && <p className="form-error" role="alert">{actionError}</p>}<div className="forum-list">{forumPosts.map((post) => <article className="forum-post" key={post.id}><div className="forum-post-meta"><strong>{post.author}</strong><span>{new Date(post.createdAt).toLocaleDateString()}</span></div><p>{post.content}</p><button className="reply-button" onClick={() => { setReplyTo(post.id); setMessage('') }} type="button">{post.replies} replies · Reply</button></article>)}</div>{forumPosts.length === 0 && <div className="empty-state"><h2>Start the first discussion</h2><p>Questions and advice posted by your campus community will appear here.</p></div>}</section>}
+          {tab === 'Referral desk' && <ReferralDesk driveData={driveData} isAlumni={isAlumni} onRequestReferral={onRequestReferral} referrals={referrals} />}
+
+          {tab === 'Forum' && (
+            <ForumSection
+              user={user}
+              forumPosts={forumPosts}
+              onCreateForumPost={onCreateForumPost}
+              onFetchPostReplies={onFetchPostReplies}
+            />
+          )}
+
+          {tab === 'Profile' && (
+            <section className="alumni-content alumni-profile-section-tab">
+              <div className="section-heading-row alumni-profile-heading-row">
+                <div>
+                  <p className="eyebrow-dark">YOUR PROFESSIONAL PROFILE</p>
+                  <h2>Alumni Profile &amp; Mentorship Settings</h2>
+                </div>
+                <div className="alumni-profile-mode-toggle" role="group" aria-label="Profile View Mode">
+                  <button
+                    className={profileTabMode === 'view' ? 'mode-pill-btn active' : 'mode-pill-btn'}
+                    onClick={() => setProfileTabMode('view')}
+                    type="button"
+                  >
+                    👁️ View Profile
+                  </button>
+                  <button
+                    className={profileTabMode === 'edit' ? 'mode-pill-btn active' : 'mode-pill-btn'}
+                    onClick={() => setProfileTabMode('edit')}
+                    type="button"
+                  >
+                    ✏️ Edit Profile
+                  </button>
+                </div>
+              </div>
+
+              {profileTabMode === 'edit' ? (
+                <AlumniEditProfileTabPanel
+                  key={user?.id || 'profile'}
+                  onCancel={() => setProfileTabMode('view')}
+                  onSave={async (updatedData) => {
+                    await onUpdateAlumniProfile(updatedData)
+                    setProfileTabMode('view')
+                  }}
+                  user={user}
+                />
+              ) : (
+                <AlumniProfileTopCard
+                  onOpenEdit={() => setProfileTabMode('edit')}
+                  user={user}
+                />
+              )}
+            </section>
+          )}
+        </div>
+
+        {isAlumni && !tab.startsWith('Messages') && tab !== 'Profile' && (
+          <aside className="alumni-hub-right-sidebar" aria-label="Alumni Profile">
+            <div className="sidebar-sticky-wrap">
+              <div className="sidebar-header-label">
+                <span className="eyebrow-dark">ALUMNI PROFILE</span>
+              </div>
+              <AlumniProfileTopCard
+                isSidebar
+                onOpenEdit={handleOpenEditProfile}
+                user={user}
+              />
+            </div>
+          </aside>
+        )}
+      </div>
+
+      {connectModalAlumni && (
+        <ConnectModal
+          alumni={connectModalAlumni}
+          onClose={() => setConnectModalAlumni(null)}
+          onSuccess={(newReq) => {
+            if (onSendConnectionRequest) onSendConnectionRequest(newReq)
+          }}
+        />
+      )}
     </main>
   )
 }
@@ -1101,6 +1692,513 @@ function AlumniHub({ driveData, user, mentors, mentorshipRequests, interviewSlot
 function ReferralDesk({ driveData, referrals, isAlumni, onRequestReferral }) {
   return (
     <section className="alumni-content"><div className="section-heading-row"><div><p className="eyebrow-dark">OPEN OPPORTUNITIES</p><h2>Referral desk</h2></div><span className="muted-count">{referrals.length} requests started</span></div>{driveData.length ? <div className="referral-list">{driveData.map((drive) => { const referral = referrals.find((item) => item.drive_id === drive.id); return <article className="referral-row" key={drive.id}><div><p className="company-name">{drive.company}</p><h3>{drive.role}</h3><p>₹{drive.salary.toFixed(1)} LPA <span>·</span> Apply by {formatDate(drive.deadline)}{referral ? ` · ${referral.status}` : ''}</p></div>{isAlumni ? <button className="quiet-button" disabled={Boolean(referral)} onClick={() => onRequestReferral(drive.id)} type="button">{referral ? 'Request started' : 'Start referral request'}</button> : <a className="text-link" href={`/drives/${drive.id}`}>View drive ↗</a>}</article> })}</div> : <div className="empty-state"><h2>No open drives</h2><p>Referral opportunities will appear when T&amp;P officers publish drives.</p></div>}</section>
+  )
+}
+
+function timeAgo(date) {
+  if (!date) return ''
+  const value = String(date)
+  const timestamp = /^\d{4}-\d{2}-\d{2}$/.test(value)
+    ? `${value}T00:00:00`
+    : `${value.replace(' ', 'T')}${value.endsWith('Z') ? '' : 'Z'}`
+  const parsed = new Date(timestamp)
+  if (Number.isNaN(parsed.getTime())) return value
+  const diffMs = Date.now() - parsed.getTime()
+  if (diffMs < 0) return 'Just now'
+  const diffSec = Math.floor(diffMs / 1000)
+  if (diffSec < 45) return 'Just now'
+  const diffMin = Math.floor(diffSec / 60)
+  if (diffMin < 60) return `${diffMin}m ago`
+  const diffHours = Math.floor(diffMin / 60)
+  if (diffHours < 24) return `${diffHours}h ago`
+  const diffDays = Math.floor(diffHours / 24)
+  if (diffDays === 1) return 'Yesterday'
+  if (diffDays < 7) return `${diffDays}d ago`
+  if (diffDays < 30) return `${Math.floor(diffDays / 7)}w ago`
+  if (diffDays < 365) return `${Math.floor(diffDays / 30)}mo ago`
+  return `${Math.floor(diffDays / 365)}y ago`
+}
+
+function getInitials(name) {
+  if (!name) return 'U'
+  const parts = name.trim().split(/\s+/)
+  if (parts.length >= 2) return `${parts[0][0]}${parts[1][0]}`.toUpperCase()
+  return name.slice(0, 2).toUpperCase()
+}
+
+function getAvatarColor(name = '') {
+  const colors = [
+    '#2563eb', '#7c3aed', '#059669', '#d97706', '#dc2626',
+    '#0891b2', '#4f46e5', '#db2777', '#0284c7', '#0d9488'
+  ]
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash)
+  return colors[Math.abs(hash) % colors.length]
+}
+
+function ForumPostCard({ post, user, onCreateForumPost, onFetchPostReplies }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+  const [isReplying, setIsReplying] = useState(false)
+  const [replyText, setReplyText] = useState('')
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [isLoadingReplies, setIsLoadingReplies] = useState(false)
+  const [replyError, setReplyError] = useState('')
+  const [liked, setLiked] = useState(false)
+  const [likesCount, setLikesCount] = useState(() => Math.floor((post.id.charCodeAt(0) % 7) + 1))
+  const [replyLikes, setReplyLikes] = useState({})
+
+  const replies = post.repliesList || []
+  const replyCount = Math.max(post.replies || 0, replies.length)
+
+  async function handleToggleReplies() {
+    const nextExpanded = !isExpanded
+    setIsExpanded(nextExpanded)
+    if (nextExpanded && (!post.repliesList || post.repliesList.length === 0) && replyCount > 0 && onFetchPostReplies) {
+      setIsLoadingReplies(true)
+      try {
+        await onFetchPostReplies(post.id)
+      } finally {
+        setIsLoadingReplies(false)
+      }
+    }
+  }
+
+  function handleStartReply(mentionAuthor = null) {
+    setIsReplying(true)
+    if (mentionAuthor && mentionAuthor !== user?.name) {
+      setReplyText((prev) => (prev.startsWith(`@${mentionAuthor} `) ? prev : `@${mentionAuthor} ${prev}`))
+    }
+  }
+
+  async function handleSubmitReply(e) {
+    if (e) e.preventDefault()
+    const content = replyText.trim()
+    if (!content || isSubmitting) return
+
+    setIsSubmitting(true)
+    setReplyError('')
+    try {
+      await onCreateForumPost(content, post.id)
+      setReplyText('')
+      setIsReplying(false)
+      setIsExpanded(true)
+    } catch (err) {
+      setReplyError(err.message || 'Failed to post reply')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  function handleToggleLike() {
+    setLiked((prev) => {
+      setLikesCount((count) => (prev ? count - 1 : count + 1))
+      return !prev
+    })
+  }
+
+  function handleToggleReplyLike(replyId) {
+    setReplyLikes((prev) => {
+      const isCurLiked = prev[replyId]
+      return { ...prev, [replyId]: !isCurLiked }
+    })
+  }
+
+  function renderFormattedContent(text) {
+    if (!text) return null
+    const parts = text.split(/(@[a-zA-Z0-9_\s]{2,25}(?=\s|$|[.,!?]))/g)
+    return parts.map((part, index) => {
+      if (part.startsWith('@')) {
+        return <span key={index} className="yt-mention-tag">{part}</span>
+      }
+      return part
+    })
+  }
+
+  return (
+    <article className="yt-forum-card">
+      <div className="yt-post-main">
+        {/* Avatar */}
+        <div
+          className="yt-avatar yt-avatar-md"
+          style={{ background: getAvatarColor(post.author) }}
+          aria-hidden="true"
+        >
+          {getInitials(post.author)}
+        </div>
+
+        {/* Content wrap */}
+        <div className="yt-post-content-wrap">
+          <header className="yt-post-header">
+            <span className="yt-author-name">{post.author}</span>
+            {post.authorRole && (
+              <span className={`yt-role-badge ${post.authorRole.toLowerCase().replace(/[^a-z]/g, '')}`}>
+                {post.authorRole === 'Alumni' && post.authorCompany
+                  ? `Alumni · ${post.authorCompany}`
+                  : post.authorRole === 'Student' && post.authorBranch
+                  ? `Student · ${post.authorBranch}`
+                  : post.authorRole}
+              </span>
+            )}
+            <span className="yt-dot-sep">•</span>
+            <span className="yt-post-time" title={post.createdAt ? new Date(post.createdAt).toLocaleString() : ''}>
+              {timeAgo(post.createdAt)}
+            </span>
+          </header>
+
+          <div className="yt-post-body">
+            <p>{post.content}</p>
+          </div>
+
+          {/* Action Row */}
+          <div className="yt-actions-row">
+            <button
+              type="button"
+              className={`yt-action-btn ${liked ? 'active-liked' : ''}`}
+              onClick={handleToggleLike}
+              title="Like this discussion"
+              aria-label="Like"
+            >
+              <svg viewBox="0 0 24 24" className="yt-icon" fill={liked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+              </svg>
+              <span>{likesCount > 0 ? likesCount : ''}</span>
+            </button>
+
+            <button
+              type="button"
+              className="yt-action-btn"
+              onClick={() => handleStartReply()}
+              aria-label="Reply to discussion"
+            >
+              <svg viewBox="0 0 24 24" className="yt-icon" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <polyline points="9 17 4 12 9 7" />
+                <path d="M20 18v-2a4 4 0 0 0-4-4H4" />
+              </svg>
+              <span>Reply</span>
+            </button>
+          </div>
+
+          {/* YouTube-style Replies Toggle Button */}
+          {replyCount > 0 && (
+            <button
+              type="button"
+              className={`yt-replies-toggle-btn ${isExpanded ? 'expanded' : ''}`}
+              onClick={handleToggleReplies}
+              aria-expanded={isExpanded}
+            >
+              <svg viewBox="0 0 24 24" className="yt-toggle-chevron" fill="currentColor">
+                <path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6 1.41-1.41z" />
+              </svg>
+              <span className="yt-toggle-label">
+                {isExpanded
+                  ? `Hide ${replyCount === 1 ? 'reply' : `${replyCount} replies`}`
+                  : `${replyCount} ${replyCount === 1 ? 'reply' : 'replies'}`}
+              </span>
+            </button>
+          )}
+
+          {/* Inline Reply Composer */}
+          {isReplying && (
+            <form className="yt-inline-reply-composer" onSubmit={handleSubmitReply}>
+              <div
+                className="yt-avatar yt-avatar-sm"
+                style={{ background: getAvatarColor(user?.name || 'You') }}
+                aria-hidden="true"
+              >
+                {getInitials(user?.name || 'You')}
+              </div>
+              <div className="yt-composer-inner">
+                <textarea
+                  className="yt-composer-textarea"
+                  rows={2}
+                  placeholder="Add a reply…"
+                  value={replyText}
+                  onChange={(e) => setReplyText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                      handleSubmitReply(e)
+                    }
+                  }}
+                  autoFocus
+                />
+                {replyError && <p className="form-error" role="alert">{replyError}</p>}
+                <div className="yt-composer-footer">
+                  <span className="yt-composer-hint">Ctrl + Enter to reply</span>
+                  <div className="yt-composer-buttons">
+                    <button
+                      type="button"
+                      className="yt-cancel-btn"
+                      onClick={() => { setIsReplying(false); setReplyText(''); setReplyError('') }}
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      className="primary-button compact-button yt-reply-submit"
+                      disabled={!replyText.trim() || isSubmitting}
+                    >
+                      {isSubmitting ? 'Replying…' : 'Reply'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </form>
+          )}
+
+          {/* Expanded Replies Thread */}
+          {isExpanded && (
+            <div className="yt-replies-thread" role="region" aria-label={`Replies to ${post.author}'s post`}>
+              {isLoadingReplies && (
+                <div className="yt-replies-loading">
+                  <div className="yt-mini-spinner" />
+                  <span>Loading replies…</span>
+                </div>
+              )}
+
+              {replies.map((reply) => {
+                const replyLiked = Boolean(replyLikes[reply.id])
+                return (
+                  <div className="yt-reply-item" key={reply.id}>
+                    <div
+                      className="yt-avatar yt-avatar-sm"
+                      style={{ background: getAvatarColor(reply.author) }}
+                      aria-hidden="true"
+                    >
+                      {getInitials(reply.author)}
+                    </div>
+                    <div className="yt-reply-content-wrap">
+                      <header className="yt-reply-header">
+                        <strong className="yt-reply-author">{reply.author}</strong>
+                        {reply.authorRole && (
+                          <span className={`yt-role-badge sm ${reply.authorRole.toLowerCase().replace(/[^a-z]/g, '')}`}>
+                            {reply.authorRole === 'Alumni' && reply.authorCompany
+                              ? `Alumni · ${reply.authorCompany}`
+                              : reply.authorRole}
+                          </span>
+                        )}
+                        <span className="yt-dot-sep">•</span>
+                        <span className="yt-post-time" title={reply.createdAt ? new Date(reply.createdAt).toLocaleString() : ''}>
+                          {timeAgo(reply.createdAt)}
+                        </span>
+                      </header>
+
+                      <div className="yt-reply-body">
+                        <p>{renderFormattedContent(reply.content)}</p>
+                      </div>
+
+                      <div className="yt-reply-actions">
+                        <button
+                          type="button"
+                          className={`yt-action-btn yt-action-btn-sm ${replyLiked ? 'active-liked' : ''}`}
+                          onClick={() => handleToggleReplyLike(reply.id)}
+                          aria-label="Like reply"
+                        >
+                          <svg viewBox="0 0 24 24" className="yt-icon-sm" fill={replyLiked ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                            <path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3zM7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3" />
+                          </svg>
+                          <span>{replyLiked ? '1' : ''}</span>
+                        </button>
+
+                        <button
+                          type="button"
+                          className="yt-action-btn yt-action-btn-sm"
+                          onClick={() => handleStartReply(reply.author)}
+                          aria-label={`Reply to ${reply.author}`}
+                        >
+                          Reply
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+
+              {replies.length === 0 && !isLoadingReplies && (
+                <div className="yt-no-replies">
+                  <span>No replies yet. Be the first to join the conversation!</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    </article>
+  )
+}
+
+function ForumSection({ user, forumPosts = [], onCreateForumPost, onFetchPostReplies }) {
+  const [newDiscussionText, setNewDiscussionText] = useState('')
+  const [searchQuery, setSearchQuery] = useState('')
+  const [sortBy, setSortBy] = useState('latest')
+  const [isComposing, setIsComposing] = useState(false)
+  const [isSubmitting, setIsSubmitting] = useState(false)
+  const [postError, setPostError] = useState('')
+
+  async function handleCreateDiscussion(e) {
+    if (e) e.preventDefault()
+    const content = newDiscussionText.trim()
+    if (!content || isSubmitting) return
+
+    setIsSubmitting(true)
+    setPostError('')
+    try {
+      await onCreateForumPost(content, null)
+      setNewDiscussionText('')
+      setIsComposing(false)
+    } catch (err) {
+      setPostError(err.message || 'Failed to post discussion')
+    } finally {
+      setIsSubmitting(false)
+    }
+  }
+
+  const filteredPosts = forumPosts.filter((post) => {
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase()
+      const matchAuthor = post.author?.toLowerCase().includes(q)
+      const matchContent = post.content?.toLowerCase().includes(q)
+      if (!matchAuthor && !matchContent) return false
+    }
+    return true
+  })
+
+  const sortedPosts = [...filteredPosts].sort((a, b) => {
+    if (sortBy === 'active') {
+      const aReplies = (a.repliesList?.length || 0) || (a.replies || 0)
+      const bReplies = (b.repliesList?.length || 0) || (b.replies || 0)
+      if (bReplies !== aReplies) return bReplies - aReplies
+    }
+    return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  })
+
+  return (
+    <section className="alumni-content yt-forum-container">
+      {/* Header */}
+      <div className="yt-forum-header">
+        <div>
+          <p className="eyebrow-dark">COMMUNITY DISCUSSIONS</p>
+          <h2>Alumni &amp; Campus Forum</h2>
+          <p className="yt-forum-subtitle">
+            Exchange advice, share interview preparation journeys, and connect openly across classes.
+          </p>
+        </div>
+        <div className="yt-forum-meta-badge">
+          <strong>{forumPosts.length}</strong>
+          <span>{forumPosts.length === 1 ? 'Discussion' : 'Discussions'}</span>
+        </div>
+      </div>
+
+      {/* Main Composer Card */}
+      <div className={`yt-main-composer-card ${isComposing ? 'focused' : ''}`}>
+        <div className="yt-composer-row">
+          <div
+            className="yt-avatar yt-avatar-md"
+            style={{ background: getAvatarColor(user?.name || 'You') }}
+            aria-hidden="true"
+          >
+            {getInitials(user?.name || 'You')}
+          </div>
+          <div className="yt-composer-field">
+            <textarea
+              className="yt-composer-input"
+              rows={isComposing ? 3 : 1}
+              placeholder="Start a campus discussion or ask alumni for guidance…"
+              value={newDiscussionText}
+              onChange={(e) => setNewDiscussionText(e.target.value)}
+              onFocus={() => setIsComposing(true)}
+              onKeyDown={(e) => {
+                if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+                  handleCreateDiscussion(e)
+                }
+              }}
+            />
+          </div>
+        </div>
+
+        {postError && <p className="form-error yt-post-error" role="alert">{postError}</p>}
+
+        {isComposing && (
+          <div className="yt-composer-actions-bar">
+            <span className="yt-composer-shortcut-hint">Press Ctrl + Enter to publish</span>
+            <div className="yt-composer-btns">
+              <button
+                type="button"
+                className="yt-cancel-btn"
+                onClick={() => {
+                  setIsComposing(false)
+                  setNewDiscussionText('')
+                  setPostError('')
+                }}
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                className="primary-button compact-button"
+                disabled={!newDiscussionText.trim() || isSubmitting}
+                onClick={handleCreateDiscussion}
+              >
+                {isSubmitting ? 'Posting…' : 'Post Discussion'}
+              </button>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Filter and Sort Toolbar */}
+      <div className="yt-forum-toolbar">
+        <div className="yt-search-wrap">
+          <svg viewBox="0 0 24 24" className="yt-search-icon" fill="none" stroke="currentColor" strokeWidth="2">
+            <circle cx="11" cy="11" r="8" />
+            <line x1="21" y1="21" x2="16.65" y2="16.65" />
+          </svg>
+          <input
+            type="search"
+            className="yt-search-input"
+            placeholder="Search discussions or questions…"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+          />
+        </div>
+
+        <div className="yt-sort-group">
+          <label htmlFor="forum-sort-select" className="yt-sort-label">Sort by:</label>
+          <select
+            id="forum-sort-select"
+            className="yt-sort-select"
+            value={sortBy}
+            onChange={(e) => setSortBy(e.target.value)}
+          >
+            <option value="latest">Latest First</option>
+            <option value="active">Most Replies</option>
+          </select>
+        </div>
+      </div>
+
+      {/* Discussion List */}
+      <div className="yt-forum-list">
+        {sortedPosts.map((post) => (
+          <ForumPostCard
+            key={post.id}
+            post={post}
+            user={user}
+            onCreateForumPost={onCreateForumPost}
+            onFetchPostReplies={onFetchPostReplies}
+          />
+        ))}
+
+        {sortedPosts.length === 0 && (
+          <div className="empty-state yt-empty-discussions">
+            <h2>{searchQuery ? 'No matching discussions' : 'Start the first discussion'}</h2>
+            <p>
+              {searchQuery
+                ? `No discussions found matching "${searchQuery}". Try a different keyword.`
+                : 'Questions, interview insights, and advice posted by your campus community will appear here.'}
+            </p>
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 
@@ -1186,6 +2284,7 @@ function App() {
   const [user, setUser] = useState(() => getSession().user)
   const [profile, setProfile] = useState(null)
   const [resume, setResume] = useState(null)
+  const [scorecard, setScorecard] = useState(null)
   const [certificates, setCertificates] = useState([])
   const [applications, setApplications] = useState([])
   const [driveData, setDriveData] = useState([])
@@ -1197,11 +2296,15 @@ function App() {
   const [activeCertificateModal, setActiveCertificateModal] = useState(null)
   const [mentors, setMentors] = useState([])
   const [mentorshipRequests, setMentorshipRequests] = useState([])
+  const [connectionRequests, setConnectionRequests] = useState([])
+  const [conversations, setConversations] = useState([])
+  const [activeChatConversationId, setActiveChatConversationId] = useState(null)
   const [interviewSlots, setInterviewSlots] = useState([])
   const [referrals, setReferrals] = useState([])
   const [forumPosts, setForumPosts] = useState([])
   const [loading, setLoading] = useState(true)
   const [loadError, setLoadError] = useState('')
+  const [alumniTab, setAlumniTab] = useState(() => (typeof window !== 'undefined' && window.location.search.includes('tab=profile') ? 'Profile' : null))
   const path = window.location.pathname
   const detailId = path.startsWith('/drives/') ? path.split('/')[2] : null
   const isAuth = path === '/login' || path === '/register'
@@ -1238,15 +2341,17 @@ function App() {
 
       try {
         if (activeUser?.role === 'Student') {
-          const [profileResponse, resumeResponse, certificateResponse, applicationResponse] = await Promise.all([
+          const [profileResponse, resumeResponse, scorecardResponse, certificateResponse, applicationResponse] = await Promise.all([
             apiRequest('/student/profile'),
             apiRequest('/student/resume'),
+            apiRequest('/student/scorecard'),
             apiRequest('/student/certificates'),
             apiRequest('/student/applications'),
           ])
           if (cancelled) return
           setProfile(profileResponse.profile)
           setResume(resumeResponse.resume)
+          setScorecard(scorecardResponse.scorecard)
           setCertificates(certificateResponse.certificates)
           setApplications(applicationResponse.applications)
         }
@@ -1286,12 +2391,14 @@ function App() {
         }
 
         if (path === '/alumni') {
-          const [mentorResponse, requestResponse, slotResponse, referralResponse, forumResponse] = await Promise.all([
+          const [mentorResponse, requestResponse, slotResponse, referralResponse, forumResponse, connResponse, convResponse] = await Promise.all([
             apiRequest('/alumni/mentors'),
             apiRequest('/alumni/mentorship-requests'),
             apiRequest('/alumni/interview-slots'),
             apiRequest('/alumni/referrals'),
             apiRequest('/alumni/forum'),
+            apiRequest('/connections/requests').catch(() => ({ requests: [] })),
+            apiRequest('/chat/conversations').catch(() => ({ conversations: [] })),
           ])
           if (cancelled) return
           setMentors(mentorResponse.mentors)
@@ -1299,6 +2406,8 @@ function App() {
           setInterviewSlots(slotResponse.slots)
           setReferrals(referralResponse.referrals)
           setForumPosts(forumResponse.posts)
+          setConnectionRequests(connResponse.requests || [])
+          setConversations(convResponse.conversations || [])
         }
       } catch (error) {
         if (!cancelled) setLoadError(error.message)
@@ -1339,6 +2448,40 @@ function App() {
     formData.append('resume', file)
     const response = await apiRequest('/student/resume', { method: 'POST', body: formData })
     setResume(response.resume)
+  }
+
+  async function saveScorecard(file) {
+    const formData = new FormData()
+    formData.append('scorecard', file)
+    const response = await apiRequest('/student/scorecard', { method: 'POST', body: formData })
+    setScorecard(response.scorecard)
+  }
+
+  async function viewStudentScorecard() {
+    const url = await protectedFileUrl('/student/scorecard/file')
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
+  async function updateSemGpa(semGpa) {
+    const response = await apiRequest('/student/sem-gpa', { method: 'PUT', body: { semGpa } })
+    setProfile(response.profile)
+  }
+
+  async function viewTPStudentScorecard(studentId) {
+    try {
+      const url = await protectedFileUrl(`/tp/students/${studentId}/scorecard`)
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } catch (err) {
+      alert(err.message || 'Unable to open scorecard PDF.')
+    }
+  }
+
+  async function downloadTPStudentScorecard(studentId, name) {
+    try {
+      await downloadProtectedFile(`/tp/students/${studentId}/scorecard`, `${name}-Scorecard.pdf`)
+    } catch (err) {
+      alert(err.message || 'Unable to download scorecard PDF.')
+    }
   }
 
   async function createCertificate(formData) {
@@ -1447,14 +2590,98 @@ function App() {
   async function createForumPost(content, parentId = null) {
     const response = await apiRequest('/alumni/forum', { method: 'POST', body: { content, parentId } })
     if (parentId) {
-      setForumPosts((items) => items.map((item) => item.id === parentId ? { ...item, replies: item.replies + 1 } : item))
+      setForumPosts((items) => items.map((item) => {
+        if (item.id === parentId) {
+          const currentReplies = item.repliesList || []
+          return {
+            ...item,
+            replies: (item.replies || 0) + 1,
+            repliesList: [...currentReplies, response.post],
+          }
+        }
+        return item
+      }))
     } else {
-      setForumPosts((items) => [response.post, ...items])
+      setForumPosts((items) => [{ ...response.post, repliesList: [], replies: 0 }, ...items])
+    }
+    return response.post
+  }
+
+  async function fetchPostReplies(postId) {
+    try {
+      const response = await apiRequest(`/alumni/forum/${postId}/replies`)
+      if (response?.replies) {
+        setForumPosts((items) => items.map((item) => {
+          if (item.id === postId) {
+            return {
+              ...item,
+              repliesList: response.replies,
+              replies: response.replies.length,
+            }
+          }
+          return item
+        }))
+        return response.replies
+      }
+    } catch {
+      // Graceful fallback
+    }
+    return null
+  }
+
+  async function saveAlumniProfile(nextProfile) {
+    const response = await apiRequest('/alumni/profile', { method: 'PUT', body: nextProfile })
+    setUser(response.profile)
+    const session = getSession()
+    if (session?.token) {
+      saveSession({ token: session.token, user: response.profile })
+    }
+    const mentorRes = await apiRequest('/alumni/mentors').catch(() => ({ mentors: [] }))
+    setMentors(mentorRes.mentors || [])
+    return response.profile
+  }
+
+  async function refreshConnectionRequests() {
+    try {
+      const response = await apiRequest('/connections/requests')
+      setConnectionRequests(response.requests || [])
+    } catch {
+      // quiet catch
+    }
+  }
+
+  async function refreshConversations() {
+    try {
+      const response = await apiRequest('/chat/conversations')
+      setConversations(response.conversations || [])
+    } catch {
+      // quiet catch
+    }
+  }
+
+  function handleSendConnectionRequest(newRequest) {
+    setConnectionRequests((prev) => {
+      const rest = prev.filter((r) => r.id !== newRequest.id && r.alumniId !== newRequest.alumniId)
+      return [newRequest, ...rest]
+    })
+    refreshConnectionRequests()
+  }
+
+  async function handleUpdateConnectionRequestStatus(id, status) {
+    const response = await apiRequest(`/connections/requests/${id}`, {
+      method: 'PATCH',
+      body: { status },
+    })
+    setConnectionRequests((prev) =>
+      prev.map((item) => (item.id === id ? { ...item, status: response.request.status, conversationId: response.request.conversationId } : item))
+    )
+    if (status === 'Accepted') {
+      await refreshConversations()
     }
   }
 
   let page
-  if (path === '/student') page = <StudentDashboard profile={profile} resume={resume} certificates={certificates} onSaveProfile={saveProfile} onSaveResume={saveResume} onViewResume={viewStudentResume} onCreateCertificate={createCertificate} onUpdateCertificate={updateCertificate} onDeleteCertificate={deleteCertificate} onViewCertificate={viewCertificate} applications={applications} />
+  if (path === '/student') page = <StudentDashboard profile={profile} resume={resume} scorecard={scorecard} certificates={certificates} onSaveProfile={saveProfile} onSaveResume={saveResume} onViewResume={viewStudentResume} onSaveScorecard={saveScorecard} onViewScorecard={viewStudentScorecard} onUpdateSemGpa={updateSemGpa} onCreateCertificate={createCertificate} onUpdateCertificate={updateCertificate} onDeleteCertificate={deleteCertificate} onViewCertificate={viewCertificate} applications={applications} />
   else if (path === '/tp') page = <TPCommandCenter driveData={driveData} studentList={studentList} />
   else if (path === '/tp/create') page = <CreateDrivePage onCreateDrive={createDrive} />
   else if (path.startsWith('/tp/students/')) {
@@ -1465,19 +2692,47 @@ function App() {
         onDownloadCertificate={downloadTPCertificate}
         onViewResume={() => viewTPStudentResume(activeStudent.id, activeStudent.name)}
         onDownloadResume={() => downloadTPStudentResume(activeStudent.id, activeStudent.name)}
+        onViewScorecard={() => viewTPStudentScorecard(activeStudent.id)}
+        onDownloadScorecard={() => downloadTPStudentScorecard(activeStudent.id, activeStudent.name)}
       />
     ) : (
       <main className="workspace-content"><a className="back-link" href="/tp">← <span>T&amp;P Center</span></a><h1>Student not found</h1></main>
     )
   } else if (path.startsWith('/tp/drives/')) {
     page = activeDrive ? <ApplicantReview drive={activeDrive} applicants={applicants} onUpdateStatus={updateApplicationStatus} onViewResume={(id) => protectedFileUrl(`/tp/applications/${id}/resume`)} /> : <main className="workspace-content"><a className="back-link" href="/tp">← <span>T&amp;P Center</span></a><h1>Drive not found</h1></main>
-  } else if (path === '/alumni') page = <AlumniHub driveData={driveData} user={user} mentors={mentors} mentorshipRequests={mentorshipRequests} interviewSlots={interviewSlots} referrals={referrals} forumPosts={forumPosts} onRequestMentorship={requestMentorship} onUpdateMentorshipRequest={updateMentorshipRequest} onBookInterview={bookInterviewSlot} onCreateInterviewSlot={createInterviewSlot} onRequestReferral={requestReferral} onCreateForumPost={createForumPost} />
+  } else if (path === '/alumni') page = <AlumniHub
+    activeAlumniTab={alumniTab}
+    activeChatConversationId={activeChatConversationId}
+    connectionRequests={connectionRequests}
+    conversations={conversations}
+    driveData={driveData}
+    forumPosts={forumPosts}
+    interviewSlots={interviewSlots}
+    mentors={mentors}
+    mentorshipRequests={mentorshipRequests}
+    onBookInterview={bookInterviewSlot}
+    onCreateForumPost={createForumPost}
+    onFetchPostReplies={fetchPostReplies}
+    onCreateInterviewSlot={createInterviewSlot}
+    onRefreshConnectionRequests={refreshConnectionRequests}
+    onRefreshConversations={refreshConversations}
+    onRequestMentorship={requestMentorship}
+    onRequestReferral={requestReferral}
+    onSelectAlumniTab={setAlumniTab}
+    onSendConnectionRequest={handleSendConnectionRequest}
+    onUpdateAlumniProfile={saveAlumniProfile}
+    onUpdateConnectionRequestStatus={handleUpdateConnectionRequestStatus}
+    onUpdateMentorshipRequest={updateMentorshipRequest}
+    referrals={referrals}
+    setActiveChatConversationId={setActiveChatConversationId}
+    user={user}
+  />
   else if (activeDrive) page = <DriveDetail drive={activeDrive} user={user} profile={profile} isApplied={applications.some((application) => application.drive.id === activeDrive.id)} onApply={applyToDrive} />
   else page = <DriveListing driveData={driveData} />
 
   return (
     <div className="app-shell">
-      <Header user={user} onSignOut={signOut} />
+      <Header activeAlumniTab={alumniTab} onSelectAlumniTab={setAlumniTab} onSignOut={signOut} user={user} />
       {page}
       {activeResume && (
         <div className="resume-viewer-backdrop" role="presentation" onClick={() => setActiveResume(null)}>

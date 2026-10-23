@@ -18,6 +18,11 @@ CREATE TABLE IF NOT EXISTS users (
   skills_json TEXT NOT NULL DEFAULT '[]',
   company TEXT NOT NULL DEFAULT '',
   job_title TEXT NOT NULL DEFAULT '',
+  experience TEXT NOT NULL DEFAULT '',
+  bio TEXT NOT NULL DEFAULT '',
+  passout_year INTEGER NOT NULL DEFAULT 0,
+  linkedin_url TEXT NOT NULL DEFAULT '',
+  sem_gpa_json TEXT NOT NULL DEFAULT '{}',
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
@@ -42,6 +47,15 @@ CREATE TABLE IF NOT EXISTS drives (
 
 -- Student resume metadata (file stored in data/uploads/)
 CREATE TABLE IF NOT EXISTS resumes (
+  student_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
+  original_name TEXT NOT NULL,
+  stored_name TEXT NOT NULL UNIQUE,
+  size_bytes INTEGER NOT NULL,
+  uploaded_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+-- Student all-semester scorecard PDF (file stored in data/uploads/)
+CREATE TABLE IF NOT EXISTS scorecards (
   student_id TEXT PRIMARY KEY REFERENCES users(id) ON DELETE CASCADE,
   original_name TEXT NOT NULL,
   stored_name TEXT NOT NULL UNIQUE,
@@ -127,9 +141,50 @@ CREATE TABLE IF NOT EXISTS forum_posts (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+
+-- Connection requests between students and alumni
+CREATE TABLE IF NOT EXISTS connection_requests (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  alumni_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  message TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'Pending' CHECK (status IN ('Pending', 'Accepted', 'Rejected')),
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (student_id, alumni_id)
+);
+
+-- Active 1-to-1 conversations between students and alumni with accepted connections
+CREATE TABLE IF NOT EXISTS conversations (
+  id TEXT PRIMARY KEY,
+  connection_request_id TEXT NOT NULL UNIQUE REFERENCES connection_requests(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  alumni_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  created_at TEXT NOT NULL DEFAULT (datetime('now')),
+  updated_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (student_id, alumni_id)
+);
+
+-- Private chat messages
+CREATE TABLE IF NOT EXISTS messages (
+  id TEXT PRIMARY KEY,
+  conversation_id TEXT NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  sender_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  content TEXT NOT NULL,
+  read_at TEXT DEFAULT NULL,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for query performance
 CREATE INDEX IF NOT EXISTS drives_owner_idx ON drives(owner_id);
 CREATE INDEX IF NOT EXISTS certificates_student_idx ON certificates(student_id, issue_date DESC);
 CREATE INDEX IF NOT EXISTS applications_drive_idx ON applications(drive_id, applied_at);
 CREATE INDEX IF NOT EXISTS applications_student_idx ON applications(student_id, applied_at);
 CREATE INDEX IF NOT EXISTS forum_posts_parent_idx ON forum_posts(parent_id, created_at);
+CREATE INDEX IF NOT EXISTS connection_requests_student_idx ON connection_requests(student_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS connection_requests_alumni_idx ON connection_requests(alumni_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS conversations_student_idx ON conversations(student_id);
+CREATE INDEX IF NOT EXISTS conversations_alumni_idx ON conversations(alumni_id);
+CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at ASC);
+CREATE INDEX IF NOT EXISTS messages_sender_idx ON messages(sender_id);
+
