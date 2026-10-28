@@ -238,4 +238,11 @@ CareerBridge AI explores how full-stack engineering, data-driven insights, and A
 
 ## 📄 License
 
+This project is licensed under the MIT License.
+See the [LICENSE](LICENSE) file for details.
+
+---
+
+## 📄 License
+
 A license has not yet been specified. Please add an appropriate license before explicitly permitting others to reuse, modify, or distribute the project.
