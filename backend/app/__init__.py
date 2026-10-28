@@ -1,1 +1,1 @@
-"""CareerCompass FastAPI application package."""
+"""CareerBridge FastAPI application package."""

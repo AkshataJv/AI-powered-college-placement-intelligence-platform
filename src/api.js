@@ -1,5 +1,5 @@
-const tokenKey = 'careerCompassToken'
-const userKey = 'careerCompassUser'
+const tokenKey = 'careerBridgeToken'
+const userKey = 'careerBridgeUser'
 
 export function saveSession({ token, user }) {
   sessionStorage.setItem(tokenKey, token)

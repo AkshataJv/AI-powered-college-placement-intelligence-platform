@@ -7,12 +7,40 @@ import path from 'node:path'
 import { randomUUID } from 'node:crypto'
 import fs from 'node:fs'
 import { db, uploadDirectory } from './db.js'
+import { ROLES } from './constants/roles.js'
+import { analyzeResume, computeSemanticMatch, computeBatchSemanticMatch, generatePlacementInsights } from './services/aiService.js'
+import { getPlacementAnalytics, getPlacementRecordsForExport } from './services/analyticsService.js'
+import {
+  createAnnouncement,
+  getNotices,
+  getNoticeById,
+  toggleNoticeRead,
+  updateAnnouncement,
+  archiveAnnouncement,
+  getNoticeStats,
+  getUserNotifications,
+  markNotificationRead,
+  markAllNotificationsRead,
+} from './services/noticeService.js'
+import {
+  getStudentReadiness,
+  getSkillGapTargets,
+  calculateStudentSkillGap,
+  runStudentResumeATS,
+  getLatestResumeATS,
+  getStudentRoadmap,
+  generateOrUpdateStudentRoadmap,
+  toggleRoadmapTask,
+  recordCodingProgress,
+  getStudentCodingProgress,
+} from './services/studentIntelligenceService.js'
 
 const app = express()
 const port = Number(process.env.API_PORT || 3001)
-const jwtSecret = process.env.JWT_SECRET || 'career-compass-local-development-secret-change-me'
+const jwtSecret = process.env.JWT_SECRET || 'career-bridge-local-development-secret-change-me'
 const host = process.env.API_HOST || '127.0.0.1'
 const branches = ['CSE', 'IT', 'ECE', 'EEE', 'MECH', 'CIVIL', 'AIDS', 'AIML']
+export const ACADEMIC_YEARS = ['First Year', 'Second Year', 'Third Year', 'Final Year']
 
 if (process.env.NODE_ENV === 'production' && !process.env.JWT_SECRET) {
   throw new Error('JWT_SECRET must be configured in production.')
@@ -40,6 +68,7 @@ function publicUser(row) {
     experience: row.experience || '',
     bio: row.bio || '',
     passoutYear: row.passout_year || 0,
+    academicYear: row.academic_year || (row.passout_year === 2026 ? 'Final Year' : row.passout_year === 2027 ? 'Third Year' : row.passout_year === 2028 ? 'Second Year' : row.passout_year === 2029 ? 'First Year' : ''),
     linkedinUrl: row.linkedin_url || '',
     semGpa: parseJson(row.sem_gpa_json, {}),
   }
@@ -60,6 +89,8 @@ function publicDrive(row) {
     deadline: row.deadline,
     description: row.description,
     status: row.status,
+    eligibleYears: parseJson(row.eligible_years_json, ['Final Year']),
+    academicYearCycle: row.academic_year || '',
     createdAt: row.created_at,
   }
 }
@@ -162,6 +193,12 @@ function validateDrive(input) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(input.deadline || '')) errors.push('A valid application deadline is required.')
   if (!String(input.description || '').trim()) errors.push('Role description is required.')
   if (!Array.isArray(input.branches) || !input.branches.length || input.branches.some((branch) => !branches.includes(branch))) errors.push('Choose at least one valid branch.')
+  const eligibleYears = input.eligibleYears || input.eligible_years
+  if (eligibleYears !== undefined) {
+    if (!Array.isArray(eligibleYears) || !eligibleYears.length || eligibleYears.some((yr) => !ACADEMIC_YEARS.includes(yr))) {
+      errors.push('Choose at least one valid eligible academic year (First Year, Second Year, Third Year, Final Year).')
+    }
+  }
   for (const key of ['skills', 'preferred', 'keywords']) {
     if (!Array.isArray(input[key]) || input[key].some((value) => typeof value !== 'string')) errors.push(`${key} must be a list of text values.`)
   }
@@ -172,7 +209,7 @@ function validateDrive(input) {
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', database: 'sqlite' }))
 
 app.post('/api/auth/register', (req, res) => {
-  const { name, email, password, role, branch, cgpa, backlogs, certifications, skills, company, jobTitle } = req.body || {}
+  const { name, email, password, role, branch, cgpa, backlogs, certifications, skills, company, jobTitle, academicYear } = req.body || {}
   const normalizedEmail = String(email || '').trim().toLowerCase()
   if (!String(name || '').trim() || !normalizedEmail || !String(password || '').trim()) return res.status(400).json({ error: 'Name, email, and password are required.' })
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ error: 'Enter a valid email address.' })
@@ -184,14 +221,16 @@ app.post('/api/auth/register', (req, res) => {
     if (!Number.isInteger(Number(backlogs)) || Number(backlogs) < 0) return res.status(400).json({ error: 'Backlogs must be zero or more.' })
   }
   const id = randomUUID()
+  const initialYear = role === 'Student' && ACADEMIC_YEARS.includes(academicYear) ? academicYear : ''
   try {
-    db.prepare(`INSERT INTO users (id, name, email, password_hash, role, branch, cgpa, backlogs, certifications, skills_json, company, job_title)
-      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+    db.prepare(`INSERT INTO users (id, name, email, password_hash, role, branch, cgpa, backlogs, certifications, skills_json, company, job_title, academic_year)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
       .run(id, String(name).trim(), normalizedEmail, bcrypt.hashSync(String(password), 12), role,
         branches.includes(branch) ? branch : 'CSE', role === 'Student' ? Number(cgpa) || 0 : 0,
         role === 'Student' ? Math.max(0, Number(backlogs) || 0) : 0,
         role === 'Student' ? Math.max(0, Number(certifications) || 0) : 0,
-        JSON.stringify(Array.isArray(skills) ? skills : []), String(company || '').trim(), String(jobTitle || '').trim())
+        JSON.stringify(Array.isArray(skills) ? skills : []), String(company || '').trim(), String(jobTitle || '').trim(),
+        initialYear)
     const user = publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(id))
     const token = jwt.sign({ sub: id }, jwtSecret, { expiresIn: '7d' })
     return res.status(201).json({ user, token })
@@ -212,27 +251,34 @@ app.post('/api/auth/login', (req, res) => {
 app.get('/api/auth/me', requireAuth, (req, res) => res.json({ user: req.user }))
 
 app.get('/api/drives', (_req, res) => {
-  const rows = db.prepare("SELECT * FROM drives WHERE status = 'Open' AND deadline >= date('now') ORDER BY deadline ASC").all()
+  const rows = db.prepare("SELECT * FROM drives ORDER BY deadline ASC").all()
   res.json({ drives: rows.map(publicDrive) })
 })
 
 app.get('/api/drives/:id', (req, res) => {
-  const row = db.prepare("SELECT * FROM drives WHERE id = ? AND status = 'Open'").get(req.params.id)
+  const row = db.prepare("SELECT * FROM drives WHERE id = ?").get(req.params.id)
   if (!row) return res.status(404).json({ error: 'This drive is no longer available.' })
   return res.json({ drive: publicDrive(row) })
 })
 
-app.get('/api/student/profile', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/profile', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const row = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)
   res.json({ profile: publicUser(row) })
 })
 
-app.put('/api/student/profile', requireAuth, requireRole('Student'), (req, res) => {
-  const { name, branch, cgpa, backlogs, certifications, skills, semGpa } = req.body || {}
+app.put('/api/student/profile', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
+  const { name, branch, cgpa, backlogs, certifications, skills, semGpa, academicYear } = req.body || {}
   if (!String(name || '').trim() || !branches.includes(branch)) return res.status(400).json({ error: 'Name and a valid branch are required.' })
   if (!Number.isFinite(Number(cgpa)) || Number(cgpa) < 0 || Number(cgpa) > 10) return res.status(400).json({ error: 'CGPA must be between 0 and 10.' })
   if (!Number.isInteger(Number(backlogs)) || Number(backlogs) < 0) return res.status(400).json({ error: 'Backlogs must be zero or more.' })
   if (!Array.isArray(skills) || skills.some((skill) => typeof skill !== 'string')) return res.status(400).json({ error: 'Skills must be a list of text values.' })
+  if (academicYear !== undefined && academicYear !== '' && !ACADEMIC_YEARS.includes(academicYear)) {
+    return res.status(400).json({ error: 'Choose a valid academic year (First Year, Second Year, Third Year, Final Year).' })
+  }
+
+  const validAcademicYear = academicYear !== undefined
+    ? (ACADEMIC_YEARS.includes(academicYear) ? academicYear : '')
+    : null
 
   let semGpaJson = undefined
   if (semGpa && typeof semGpa === 'object') {
@@ -248,16 +294,18 @@ app.put('/api/student/profile', requireAuth, requireRole('Student'), (req, res) 
   }
 
   if (semGpaJson !== undefined) {
-    db.prepare('UPDATE users SET name = ?, branch = ?, cgpa = ?, backlogs = ?, certifications = ?, skills_json = ?, sem_gpa_json = ? WHERE id = ?')
-      .run(String(name).trim(), branch, Number(cgpa), Number(backlogs), Math.max(0, Number(certifications) || 0), JSON.stringify(skills.map((skill) => skill.trim()).filter(Boolean)), semGpaJson, req.user.id)
+    db.prepare(`UPDATE users SET name = ?, branch = ?, cgpa = ?, backlogs = ?, certifications = ?, skills_json = ?, sem_gpa_json = ?,
+      academic_year = CASE WHEN ? IS NOT NULL THEN ? ELSE academic_year END WHERE id = ?`)
+      .run(String(name).trim(), branch, Number(cgpa), Number(backlogs), Math.max(0, Number(certifications) || 0), JSON.stringify(skills.map((skill) => skill.trim()).filter(Boolean)), semGpaJson, validAcademicYear, validAcademicYear, req.user.id)
   } else {
-    db.prepare('UPDATE users SET name = ?, branch = ?, cgpa = ?, backlogs = ?, certifications = ?, skills_json = ? WHERE id = ?')
-      .run(String(name).trim(), branch, Number(cgpa), Number(backlogs), Math.max(0, Number(certifications) || 0), JSON.stringify(skills.map((skill) => skill.trim()).filter(Boolean)), req.user.id)
+    db.prepare(`UPDATE users SET name = ?, branch = ?, cgpa = ?, backlogs = ?, certifications = ?, skills_json = ?,
+      academic_year = CASE WHEN ? IS NOT NULL THEN ? ELSE academic_year END WHERE id = ?`)
+      .run(String(name).trim(), branch, Number(cgpa), Number(backlogs), Math.max(0, Number(certifications) || 0), JSON.stringify(skills.map((skill) => skill.trim()).filter(Boolean)), validAcademicYear, validAcademicYear, req.user.id)
   }
   res.json({ profile: publicUser(db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)) })
 })
 
-app.put('/api/student/sem-gpa', requireAuth, requireRole('Student'), (req, res) => {
+app.put('/api/student/sem-gpa', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const rawSemGpa = req.body?.semGpa || {}
   const cleaned = {}
   let total = 0
@@ -283,7 +331,7 @@ app.put('/api/student/sem-gpa', requireAuth, requireRole('Student'), (req, res) 
   res.json({ profile: publicUser(updatedUser), semGpa: cleaned, cgpa: nextCgpa })
 })
 
-app.post('/api/student/resume', requireAuth, requireRole('Student'), (req, res) => {
+app.post('/api/student/resume', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   upload.single('resume')(req, res, (error) => {
     if (error) return res.status(400).json({ error: error.message || 'Resume upload failed.' })
     if (!req.file) return res.status(400).json({ error: 'Choose a PDF resume to upload.' })
@@ -349,12 +397,31 @@ const scorecardUpload = multer({
   },
 })
 
-app.get('/api/student/resume', requireAuth, requireRole('Student'), (req, res) => {
+const noticeAttachmentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, uploadDirectory),
+    filename: (_req, file, callback) => {
+      const ext = path.extname(file.originalname).toLowerCase() || '.pdf'
+      callback(null, `notice-${randomUUID()}${ext}`)
+    },
+  }),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+  fileFilter: (_req, file, callback) => {
+    const ext = path.extname(file.originalname).toLowerCase()
+    const allowed = ['.pdf', '.png', '.jpg', '.jpeg', '.doc', '.docx']
+    if (!allowed.includes(ext)) {
+      return callback(new Error('Attachments must be PDF, JPG/PNG, or DOC/DOCX files (max 5 MB).'))
+    }
+    callback(null, true)
+  },
+})
+
+app.get('/api/student/resume', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const resume = db.prepare('SELECT original_name, size_bytes, uploaded_at FROM resumes WHERE student_id = ?').get(req.user.id)
   res.json({ resume: resume ? { name: resume.original_name, size: resume.size_bytes, uploadedAt: resume.uploaded_at } : null })
 })
 
-app.get('/api/student/resume/file', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/resume/file', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const resume = db.prepare('SELECT original_name, stored_name FROM resumes WHERE student_id = ?').get(req.user.id)
   if (!resume) return res.status(404).json({ error: 'No resume has been uploaded.' })
   res.set('Content-Type', 'application/pdf')
@@ -363,7 +430,250 @@ app.get('/api/student/resume/file', requireAuth, requireRole('Student'), (req, r
   return res.sendFile(path.join(uploadDirectory, resume.stored_name))
 })
 
-app.post('/api/student/scorecard', requireAuth, requireRole('Student'), (req, res) => {
+app.post('/api/student/resume/analyze', requireAuth, requireRole(ROLES.STUDENT), async (req, res) => {
+  try {
+    const resume = db.prepare('SELECT original_name, stored_name FROM resumes WHERE student_id = ?').get(req.user.id)
+    if (!resume) {
+      return res.status(404).json({ error: 'No resume uploaded yet. Please upload a resume first.' })
+    }
+
+    const filePath = path.join(uploadDirectory, resume.stored_name)
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'No resume uploaded yet. Please upload a resume first.' })
+    }
+
+    let fileBuffer
+    try {
+      fileBuffer = fs.readFileSync(filePath)
+    } catch (readErr) {
+      console.error('[Resume Analyze] Failed to read file from disk:', readErr)
+      return res.status(500).json({ error: 'Failed to read resume file from storage.' })
+    }
+
+    let analysis
+    try {
+      analysis = await analyzeResume(fileBuffer, resume.original_name)
+    } catch (err) {
+      console.error('[Resume Analyze] AI service call error:', err.message || err)
+      if (err.message === 'AI_SERVICE_UNAVAILABLE') {
+        return res.status(503).json({ error: 'AI analysis service is currently unavailable. Please try again shortly.' })
+      }
+      return res.status(422).json({
+        error: 'Could not analyze resume',
+        detail: err.detail || err.message || 'Unknown parsing failure',
+      })
+    }
+
+    const rowId = randomUUID()
+    const parsedText = analysis.raw_text || ''
+    const skillsJson = JSON.stringify(analysis.skills || [])
+    const experienceJson = JSON.stringify(analysis.experience || [])
+    const educationJson = JSON.stringify(analysis.education || [])
+    const wordCount = analysis.word_count || 0
+
+    const upsertStmt = db.prepare(`
+      INSERT INTO resume_analysis (
+        id, student_id, parsed_text, parsed_skills_json,
+        parsed_experience_json, parsed_education_json,
+        word_count, parsed_at, source_stored_name
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, datetime('now'), ?)
+      ON CONFLICT(student_id) DO UPDATE SET
+        parsed_text = excluded.parsed_text,
+        parsed_skills_json = excluded.parsed_skills_json,
+        parsed_experience_json = excluded.parsed_experience_json,
+        parsed_education_json = excluded.parsed_education_json,
+        word_count = excluded.word_count,
+        parsed_at = excluded.parsed_at,
+        source_stored_name = excluded.source_stored_name
+    `)
+
+    upsertStmt.run(
+      rowId,
+      req.user.id,
+      parsedText,
+      skillsJson,
+      experienceJson,
+      educationJson,
+      wordCount,
+      resume.stored_name
+    )
+
+    const savedRow = db.prepare('SELECT * FROM resume_analysis WHERE student_id = ?').get(req.user.id)
+
+    return res.json({
+      id: savedRow.id,
+      studentId: savedRow.student_id,
+      skills: parseJson(savedRow.parsed_skills_json, []),
+      education: parseJson(savedRow.parsed_education_json, []),
+      experience: parseJson(savedRow.parsed_experience_json, []),
+      wordCount: savedRow.word_count,
+      word_count: savedRow.word_count,
+      parsedAt: savedRow.parsed_at,
+      parsed_at: savedRow.parsed_at,
+      rawText: savedRow.parsed_text,
+      raw_text: savedRow.parsed_text,
+    })
+  } catch (error) {
+    console.error('[Resume Analyze] Unexpected internal error:', error)
+    return res.status(500).json({ error: 'The server could not complete this request.' })
+  }
+})
+
+app.get('/api/student/resume/analysis', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
+  try {
+    const row = db.prepare('SELECT * FROM resume_analysis WHERE student_id = ?').get(req.user.id)
+    if (!row) {
+      return res.status(404).json({ error: 'No resume analysis found. Analyze your resume first.' })
+    }
+
+    return res.json({
+      id: row.id,
+      studentId: row.student_id,
+      skills: parseJson(row.parsed_skills_json, []),
+      education: parseJson(row.parsed_education_json, []),
+      experience: parseJson(row.parsed_experience_json, []),
+      wordCount: row.word_count,
+      word_count: row.word_count,
+      parsedAt: row.parsed_at,
+      parsed_at: row.parsed_at,
+      rawText: row.parsed_text,
+      raw_text: row.parsed_text,
+      sourceStoredName: row.source_stored_name,
+    })
+  } catch (error) {
+    console.error('[Resume Analysis Get] Unexpected internal error:', error)
+    return res.status(500).json({ error: 'The server could not complete this request.' })
+  }
+})
+
+// =============================================================
+// Stage 1 AI Endpoints: Readiness, Skill Gap, ATS, Roadmap
+// =============================================================
+
+// GET /api/student/readiness-score - Compute or retrieve student readiness score
+app.get('/api/student/readiness-score', requireAuth, requireRole(ROLES.STUDENT), async (req, res) => {
+  try {
+    const recalculate = req.query.recalculate === 'true' || req.query.fresh === 'true'
+    const result = await getStudentReadiness(req.user.id, recalculate)
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('[Readiness Score Error]', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to calculate placement readiness.' })
+  }
+})
+
+// POST /api/student/readiness-score/recalculate - Force fresh calculation
+app.post('/api/student/readiness-score/recalculate', requireAuth, requireRole(ROLES.STUDENT), async (req, res) => {
+  try {
+    const result = await getStudentReadiness(req.user.id, true)
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('[Readiness Recalculate Error]', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to recalculate placement readiness.' })
+  }
+})
+
+// GET /api/student/skill-gap/targets - Available target companies and roles
+app.get('/api/student/skill-gap/targets', requireAuth, requireRole(ROLES.STUDENT), (_req, res) => {
+  try {
+    const targets = getSkillGapTargets()
+    res.json({ success: true, ...targets })
+  } catch (error) {
+    console.error('[Skill Gap Targets Error]', error)
+    res.status(500).json({ error: 'Failed to retrieve skill gap target drives.' })
+  }
+})
+
+// POST /api/student/skill-gap/analyze - Run skill gap comparison
+app.post('/api/student/skill-gap/analyze', requireAuth, requireRole(ROLES.STUDENT), async (req, res) => {
+  try {
+    const analysis = await calculateStudentSkillGap(req.user.id, req.body || {})
+    res.json({ success: true, ...analysis })
+  } catch (error) {
+    console.error('[Skill Gap Analyze Error]', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to analyze skill gaps.' })
+  }
+})
+
+// POST /api/student/resume/ats-analyze - Run ATS analysis on resume
+app.post('/api/student/resume/ats-analyze', requireAuth, requireRole(ROLES.STUDENT), async (req, res) => {
+  try {
+    const result = await runStudentResumeATS(req.user.id, req.body || {})
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('[Resume ATS Analyze Error]', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to analyze resume ATS compatibility.' })
+  }
+})
+
+// GET /api/student/resume/ats-analysis - Retrieve latest saved ATS analysis
+app.get('/api/student/resume/ats-analysis', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
+  try {
+    const result = getLatestResumeATS(req.user.id)
+    if (!result) return res.status(404).json({ error: 'No ATS analysis found for this resume yet.' })
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('[Resume ATS Get Error]', error)
+    res.status(500).json({ error: 'Failed to retrieve resume ATS analysis.' })
+  }
+})
+
+// GET /api/student/roadmap - Retrieve active career roadmap
+app.get('/api/student/roadmap', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
+  try {
+    const roadmap = getStudentRoadmap(req.user.id)
+    res.json({ success: true, roadmap })
+  } catch (error) {
+    console.error('[Get Roadmap Error]', error)
+    res.status(500).json({ error: 'Failed to retrieve career roadmap.' })
+  }
+})
+
+// POST /api/student/roadmap/generate - Generate or customize career roadmap
+app.post('/api/student/roadmap/generate', requireAuth, requireRole(ROLES.STUDENT), async (req, res) => {
+  try {
+    const roadmap = await generateOrUpdateStudentRoadmap(req.user.id, req.body || {})
+    res.status(201).json({ success: true, roadmap })
+  } catch (error) {
+    console.error('[Generate Roadmap Error]', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to generate career roadmap.' })
+  }
+})
+
+// PATCH /api/student/roadmap/tasks/:taskId - Toggle roadmap task completion
+app.patch('/api/student/roadmap/tasks/:taskId', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
+  try {
+    const update = toggleRoadmapTask(req.user.id, req.params.taskId)
+    res.json({ success: true, ...update })
+  } catch (error) {
+    console.error('[Toggle Task Error]', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to update task completion.' })
+  }
+})
+
+// GET /api/student/coding-progress - Get coding challenge progress
+app.get('/api/student/coding-progress', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
+  try {
+    const progress = getStudentCodingProgress(req.user.id)
+    res.json({ success: true, ...progress })
+  } catch (error) {
+    console.error('[Coding Progress Get Error]', error)
+    res.status(500).json({ error: 'Failed to retrieve coding progress.' })
+  }
+})
+
+// POST /api/student/coding-progress - Log solved/attempted problem
+app.post('/api/student/coding-progress', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
+  try {
+    const record = recordCodingProgress(req.user.id, req.body || {})
+    res.status(201).json({ success: true, record })
+  } catch (error) {
+    console.error('[Coding Progress Post Error]', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to log coding problem.' })
+  }
+})
+
+app.post('/api/student/scorecard', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   scorecardUpload.single('scorecard')(req, res, (error) => {
     if (error) return res.status(400).json({ error: error.message || 'Scorecard upload failed.' })
     if (!req.file) return res.status(400).json({ error: 'Choose a consolidated PDF scorecard to upload.' })
@@ -385,12 +695,12 @@ app.post('/api/student/scorecard', requireAuth, requireRole('Student'), (req, re
   })
 })
 
-app.get('/api/student/scorecard', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/scorecard', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const scorecard = db.prepare('SELECT original_name, size_bytes, uploaded_at FROM scorecards WHERE student_id = ?').get(req.user.id)
   res.json({ scorecard: scorecard ? { name: scorecard.original_name, size: scorecard.size_bytes, uploadedAt: scorecard.uploaded_at } : null })
 })
 
-app.get('/api/student/scorecard/file', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/scorecard/file', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const scorecard = db.prepare('SELECT original_name, stored_name FROM scorecards WHERE student_id = ?').get(req.user.id)
   if (!scorecard) return res.status(404).json({ error: 'No consolidated scorecard has been uploaded.' })
   const filePath = path.join(uploadDirectory, scorecard.stored_name)
@@ -401,12 +711,12 @@ app.get('/api/student/scorecard/file', requireAuth, requireRole('Student'), (req
   return res.sendFile(filePath)
 })
 
-app.get('/api/student/certificates', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/certificates', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const rows = db.prepare('SELECT * FROM certificates WHERE student_id = ? ORDER BY issue_date DESC, uploaded_at DESC').all(req.user.id)
   res.json({ certificates: rows.map(publicCertificate) })
 })
 
-app.post('/api/student/certificates', requireAuth, requireRole('Student'), (req, res) => {
+app.post('/api/student/certificates', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   certificateUpload.single('certificate')(req, res, (error) => {
     if (error) return res.status(400).json({ error: error.message || 'Certificate upload failed.' })
     if (req.file && !hasValidCertificateSignature(req.file)) {
@@ -441,13 +751,13 @@ app.post('/api/student/certificates', requireAuth, requireRole('Student'), (req,
   })
 })
 
-app.get('/api/student/certificates/:id', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/certificates/:id', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const row = db.prepare('SELECT * FROM certificates WHERE id = ? AND student_id = ?').get(req.params.id, req.user.id)
   if (!row) return res.status(404).json({ error: 'Certificate not found.' })
   res.json({ certificate: publicCertificate(row) })
 })
 
-app.put('/api/student/certificates/:id', requireAuth, requireRole('Student'), (req, res) => {
+app.put('/api/student/certificates/:id', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const existing = db.prepare('SELECT * FROM certificates WHERE id = ? AND student_id = ?').get(req.params.id, req.user.id)
   if (!existing) return res.status(404).json({ error: 'Certificate not found.' })
 
@@ -494,7 +804,7 @@ app.put('/api/student/certificates/:id', requireAuth, requireRole('Student'), (r
   })
 })
 
-app.delete('/api/student/certificates/:id', requireAuth, requireRole('Student'), (req, res) => {
+app.delete('/api/student/certificates/:id', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const row = db.prepare('SELECT * FROM certificates WHERE id = ? AND student_id = ?').get(req.params.id, req.user.id)
   if (!row) return res.status(404).json({ error: 'Certificate not found.' })
   if (row.stored_name) fs.rmSync(path.join(uploadDirectory, row.stored_name), { force: true })
@@ -502,7 +812,7 @@ app.delete('/api/student/certificates/:id', requireAuth, requireRole('Student'),
   res.json({ deleted: true, id: req.params.id })
 })
 
-app.get('/api/student/certificates/:id/file', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/certificates/:id/file', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const row = db.prepare('SELECT * FROM certificates WHERE id = ? AND student_id = ?').get(req.params.id, req.user.id)
   if (!row || !row.stored_name) return res.status(404).json({ error: 'This certificate has no uploaded file.' })
 
@@ -516,7 +826,7 @@ app.get('/api/student/certificates/:id/file', requireAuth, requireRole('Student'
   return res.sendFile(path.join(uploadDirectory, row.stored_name))
 })
 
-app.get('/api/student/applications', requireAuth, requireRole('Student'), (req, res) => {
+app.get('/api/student/applications', requireAuth, requireRole(ROLES.STUDENT), (req, res) => {
   const rows = db.prepare(`SELECT a.*, d.company, d.role, d.salary, d.min_cgpa, d.max_backlogs, d.branches_json, d.skills_json, d.preferred_json, d.keywords_json, d.deadline, d.description
     FROM applications a JOIN drives d ON d.id = a.drive_id WHERE a.student_id = ? ORDER BY a.applied_at DESC`).all(req.user.id)
   res.json({ applications: rows.map((row) => ({
@@ -529,22 +839,101 @@ app.get('/api/student/applications', requireAuth, requireRole('Student'), (req, 
   })) })
 })
 
-app.post('/api/drives/:id/apply', requireAuth, requireRole('Student'), (req, res) => {
+app.post('/api/drives/:id/apply', requireAuth, requireRole(ROLES.STUDENT), async (req, res) => {
   const drive = getDrive(req.params.id)
   if (!drive || drive.status !== 'Open' || drive.deadline < new Date().toISOString().slice(0, 10)) return res.status(404).json({ error: 'This drive is no longer accepting applications.' })
   const profile = db.prepare('SELECT * FROM users WHERE id = ?').get(req.user.id)
-  if (profile.cgpa < drive.min_cgpa || profile.backlogs > drive.max_backlogs || !parseJson(drive.branches_json).includes(profile.branch)) return res.status(403).json({ error: 'Your profile does not meet this drive’s eligibility requirements.' })
+
+  const studentYear = profile.academic_year || (profile.passout_year === 2026 ? 'Final Year' : profile.passout_year === 2027 ? 'Third Year' : profile.passout_year === 2028 ? 'Second Year' : profile.passout_year === 2029 ? 'First Year' : '')
+  if (!studentYear) {
+    return res.status(403).json({ error: 'Academic year is missing from your profile. Please update your profile before applying.' })
+  }
+
+  const eligibleYears = parseJson(drive.eligible_years_json, ['Final Year'])
+  if (!eligibleYears.includes(studentYear)) {
+    return res.status(403).json({ error: `Your academic year (${studentYear}) is not eligible for this drive.` })
+  }
+
+  const driveBranches = parseJson(drive.branches_json, [])
+  if (!driveBranches.includes(profile.branch)) {
+    return res.status(403).json({ error: `Your branch (${profile.branch}) is not eligible for this drive.` })
+  }
+
+  if (profile.cgpa < drive.min_cgpa) {
+    return res.status(403).json({ error: `Your CGPA (${profile.cgpa}) is below the required minimum (${drive.min_cgpa}).` })
+  }
+
+  if (profile.backlogs > drive.max_backlogs) {
+    return res.status(403).json({ error: `Your backlogs (${profile.backlogs}) exceed the allowed maximum (${drive.max_backlogs}).` })
+  }
+
   const scoreProfile = { cgpa: profile.cgpa, skills: parseJson(profile.skills_json), certifications: profile.certifications }
   const breakdown = scoreApplication(drive, scoreProfile)
   const id = randomUUID()
   try {
     db.prepare('INSERT INTO applications (id, drive_id, student_id, match_score, score_json, profile_snapshot_json) VALUES (?, ?, ?, ?, ?, ?)')
       .run(id, drive.id, profile.id, breakdown.score, JSON.stringify(breakdown), JSON.stringify({ ...publicUser(profile), skills: scoreProfile.skills }))
-    return res.status(201).json({ application: { id, drive: publicDrive(drive), status: 'Under review', score: breakdown.score, scoreBreakdown: breakdown } })
   } catch (error) {
     if (String(error.message).includes('UNIQUE')) return res.status(409).json({ error: 'You have already applied to this drive.' })
     return res.status(500).json({ error: 'Could not submit this application.' })
   }
+
+  // Non-critical AI semantic matching calculation
+  try {
+    const driveSkills = parseJson(drive.skills_json, [])
+    const drivePreferred = parseJson(drive.preferred_json, [])
+    const driveKeywords = parseJson(drive.keywords_json, [])
+
+    const studentSkills = parseJson(profile.skills_json, [])
+    const resumeRow = db.prepare('SELECT parsed_skills_json FROM resume_analysis WHERE student_id = ?').get(profile.id)
+    const resumeSkills = resumeRow ? parseJson(resumeRow.parsed_skills_json, []) : []
+
+    const mergedSkillsMap = new Map()
+    for (const s of [...studentSkills, ...resumeSkills]) {
+      const clean = String(s || '').trim()
+      if (clean && !mergedSkillsMap.has(clean.toLowerCase())) {
+        mergedSkillsMap.set(clean.toLowerCase(), clean)
+      }
+    }
+    const mergedSkills = Array.from(mergedSkillsMap.values())
+
+    const matchResult = await computeSemanticMatch(driveSkills, drivePreferred, driveKeywords, mergedSkills)
+    if (matchResult) {
+      const skillOverlapJson = JSON.stringify({
+        required: matchResult.required || { matched: [], missing: [], match_percentage: 0 },
+        preferred: matchResult.preferred || { matched: [], missing: [], match_percentage: 0 },
+        keywords: matchResult.keywords || { matched: [], missing: [], match_percentage: 0 },
+      })
+      const explanationJson = JSON.stringify({
+        text: matchResult.explanation || '',
+      })
+
+      db.prepare(`
+        INSERT INTO ai_match_scores (
+          id, application_id, drive_id, student_id, semantic_score,
+          skill_overlap_json, explanation_json, model_version, computed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, 'v1', datetime('now'))
+        ON CONFLICT(drive_id, student_id) DO UPDATE SET
+          application_id = excluded.application_id,
+          semantic_score = excluded.semantic_score,
+          skill_overlap_json = excluded.skill_overlap_json,
+          explanation_json = excluded.explanation_json,
+          computed_at = excluded.computed_at
+      `).run(
+        randomUUID(),
+        id,
+        drive.id,
+        profile.id,
+        Number(matchResult.semantic_score || 0),
+        skillOverlapJson,
+        explanationJson
+      )
+    }
+  } catch (aiError) {
+    console.error('[Apply AI Scoring Error] Failed to compute semantic match for application:', aiError.message || aiError)
+  }
+
+  return res.status(201).json({ application: { id, drive: publicDrive(drive), status: 'Under review', score: breakdown.score, scoreBreakdown: breakdown } })
 })
 
 app.get('/api/tp/drives', requireAuth, requireRole('T&P Officer'), (req, res) => {
@@ -553,16 +942,71 @@ app.get('/api/tp/drives', requireAuth, requireRole('T&P Officer'), (req, res) =>
   res.json({ drives: rows.map((row) => ({ ...publicDrive(row), applicantCount: row.applicant_count })) })
 })
 
+app.get('/api/tp/drives/:id', requireAuth, requireRole('T&P Officer'), (req, res) => {
+  const drive = requireOwnedDrive(req.params.id, req.user.id)
+  if (!drive) return res.status(404).json({ error: 'Drive not found or unauthorized.' })
+  return res.json({ drive: publicDrive(drive) })
+})
+
 app.post('/api/tp/drives', requireAuth, requireRole('T&P Officer'), (req, res) => {
   const input = req.body || {}
   const errors = validateDrive(input)
   if (errors.length) return res.status(400).json({ error: errors[0], details: errors })
   const id = randomUUID()
-  db.prepare(`INSERT INTO drives (id, owner_id, company, role, salary, min_cgpa, max_backlogs, branches_json, skills_json, preferred_json, keywords_json, deadline, description)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+  const rawYears = input.eligibleYears || input.eligible_years
+  const eligibleYears = Array.isArray(rawYears) && rawYears.length ? rawYears : ['Final Year']
+  db.prepare(`INSERT INTO drives (id, owner_id, company, role, salary, min_cgpa, max_backlogs, branches_json, eligible_years_json, skills_json, preferred_json, keywords_json, deadline, description)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`)
     .run(id, req.user.id, String(input.company).trim(), String(input.role).trim(), Number(input.salary), Number(input.cgpa), Number(input.backlogs),
-      JSON.stringify(input.branches), JSON.stringify(input.skills), JSON.stringify(input.preferred || []), JSON.stringify(input.keywords || []), input.deadline, String(input.description).trim())
+      JSON.stringify(input.branches), JSON.stringify(eligibleYears), JSON.stringify(input.skills), JSON.stringify(input.preferred || []), JSON.stringify(input.keywords || []), input.deadline, String(input.description).trim())
   return res.status(201).json({ drive: publicDrive(getDrive(id)) })
+})
+
+app.put('/api/tp/drives/:id', requireAuth, requireRole('T&P Officer'), (req, res) => {
+  const drive = requireOwnedDrive(req.params.id, req.user.id)
+  if (!drive) return res.status(404).json({ error: 'Drive not found or unauthorized.' })
+  const input = req.body || {}
+  const errors = validateDrive(input)
+  if (errors.length) return res.status(400).json({ error: errors[0], details: errors })
+
+  const rawYears = input.eligibleYears || input.eligible_years
+  const eligibleYears = Array.isArray(rawYears) && rawYears.length ? rawYears : parseJson(drive.eligible_years_json, ['Final Year'])
+
+  db.prepare(`UPDATE drives SET
+    company = ?,
+    role = ?,
+    salary = ?,
+    min_cgpa = ?,
+    max_backlogs = ?,
+    branches_json = ?,
+    eligible_years_json = ?,
+    skills_json = ?,
+    preferred_json = ?,
+    keywords_json = ?,
+    deadline = ?,
+    description = ?,
+    status = CASE WHEN ? IN ('Open', 'Closed') THEN ? ELSE status END
+    WHERE id = ? AND owner_id = ?`)
+    .run(
+      String(input.company).trim(),
+      String(input.role).trim(),
+      Number(input.salary),
+      Number(input.cgpa),
+      Number(input.backlogs),
+      JSON.stringify(input.branches),
+      JSON.stringify(eligibleYears),
+      JSON.stringify(input.skills),
+      JSON.stringify(input.preferred || []),
+      JSON.stringify(input.keywords || []),
+      input.deadline,
+      String(input.description).trim(),
+      input.status || '',
+      input.status || '',
+      req.params.id,
+      req.user.id
+    )
+
+  return res.json({ drive: publicDrive(getDrive(req.params.id)) })
 })
 
 app.patch('/api/tp/drives/:id/status', requireAuth, requireRole('T&P Officer'), (req, res) => {
@@ -579,12 +1023,137 @@ app.get('/api/tp/drives/:id/applicants', requireAuth, requireRole('T&P Officer')
     EXISTS(SELECT 1 FROM resumes r WHERE r.student_id = u.id) AS has_resume,
     (SELECT COUNT(*) FROM certificates c WHERE c.student_id = u.id) AS certificate_count
     FROM applications a JOIN users u ON u.id = a.student_id WHERE a.drive_id = ? ORDER BY a.match_score DESC, a.applied_at ASC`).all(drive.id)
-  res.json({ applicants: rows.map((row) => ({
-    id: row.id, studentId: row.student_user_id, name: row.name, email: row.email, branch: row.branch, cgpa: row.cgpa, backlogs: row.backlogs,
-    certifications: row.certifications, certificateCount: row.certificate_count, skills: parseJson(row.skills_json), score: row.match_score,
-    scoreBreakdown: parseJson(row.score_json, {}), status: row.status, appliedAt: row.applied_at, hasResume: Boolean(row.has_resume),
-  })) })
+
+  const aiScoreStmt = db.prepare('SELECT * FROM ai_match_scores WHERE drive_id = ? AND student_id = ?')
+
+  res.json({ applicants: rows.map((row) => {
+    const aiScore = aiScoreStmt.get(drive.id, row.student_user_id)
+    let aiSemanticScore = null
+    let aiExplanation = null
+    let aiSkillBreakdown = null
+
+    if (aiScore) {
+      aiSemanticScore = aiScore.semantic_score != null ? Number(aiScore.semantic_score) : null
+      const parsedExp = parseJson(aiScore.explanation_json, null)
+      aiExplanation = parsedExp?.text !== undefined ? parsedExp.text : (typeof parsedExp === 'string' ? parsedExp : null)
+      aiSkillBreakdown = parseJson(aiScore.skill_overlap_json, null)
+    }
+
+    return {
+      id: row.id,
+      studentId: row.student_user_id,
+      name: row.name,
+      email: row.email,
+      branch: row.branch,
+      cgpa: row.cgpa,
+      backlogs: row.backlogs,
+      certifications: row.certifications,
+      certificateCount: row.certificate_count,
+      skills: parseJson(row.skills_json),
+      score: row.match_score,
+      scoreBreakdown: parseJson(row.score_json, {}),
+      status: row.status,
+      appliedAt: row.applied_at,
+      hasResume: Boolean(row.has_resume),
+      aiSemanticScore,
+      aiExplanation,
+      aiSkillBreakdown,
+    }
+  }) })
 })
+
+app.post('/api/tp/drives/:id/recompute-ai-scores', requireAuth, requireRole('T&P Officer'), async (req, res) => {
+  const drive = requireOwnedDrive(req.params.id, req.user.id)
+  if (!drive) return res.status(404).json({ error: 'Drive not found.' })
+
+  const driveSkills = parseJson(drive.skills_json, [])
+  const drivePreferred = parseJson(drive.preferred_json, [])
+  const driveKeywords = parseJson(drive.keywords_json, [])
+
+  const applications = db.prepare(`
+    SELECT a.id AS application_id, a.student_id, u.skills_json AS user_skills_json, ra.parsed_skills_json AS resume_skills_json
+    FROM applications a
+    JOIN users u ON u.id = a.student_id
+    LEFT JOIN resume_analysis ra ON ra.student_id = a.student_id
+    WHERE a.drive_id = ?
+  `).all(drive.id)
+
+  if (!applications.length) {
+    return res.json({ updated: 0, results: [] })
+  }
+
+  const appMap = new Map()
+  const candidates = applications.map((app) => {
+    appMap.set(app.student_id, app.application_id)
+    const userSkills = parseJson(app.user_skills_json, [])
+    const resumeSkills = parseJson(app.resume_skills_json, [])
+    const mergedSkillsMap = new Map()
+    for (const s of [...userSkills, ...resumeSkills]) {
+      const clean = String(s || '').trim()
+      if (clean && !mergedSkillsMap.has(clean.toLowerCase())) {
+        mergedSkillsMap.set(clean.toLowerCase(), clean)
+      }
+    }
+    return {
+      student_id: app.student_id,
+      skills: Array.from(mergedSkillsMap.values()),
+    }
+  })
+
+  let batchResponse
+  try {
+    batchResponse = await computeBatchSemanticMatch(driveSkills, drivePreferred, driveKeywords, candidates)
+  } catch (aiErr) {
+    console.error('[Recompute AI Scores Error] Batch match failed:', aiErr.message || aiErr)
+    if (aiErr.message === 'AI_SERVICE_UNAVAILABLE') {
+      return res.status(503).json({ error: 'AI matching service is currently unavailable. Please try again shortly.' })
+    }
+    return res.status(500).json({ error: 'Failed to recompute semantic match scores with AI service.', detail: aiErr.message || String(aiErr) })
+  }
+
+  const results = batchResponse?.results || []
+  const upsertStmt = db.prepare(`
+    INSERT INTO ai_match_scores (
+      id, application_id, drive_id, student_id, semantic_score,
+      skill_overlap_json, explanation_json, model_version, computed_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, 'v1', datetime('now'))
+    ON CONFLICT(drive_id, student_id) DO UPDATE SET
+      application_id = excluded.application_id,
+      semantic_score = excluded.semantic_score,
+      skill_overlap_json = excluded.skill_overlap_json,
+      explanation_json = excluded.explanation_json,
+      computed_at = excluded.computed_at
+  `)
+
+  const upsertTx = db.transaction((items) => {
+    for (const item of items) {
+      const applicationId = appMap.get(item.student_id) || null
+      const skillOverlapJson = JSON.stringify({
+        required: item.required || { matched: [], missing: [], match_percentage: 0 },
+        preferred: item.preferred || { matched: [], missing: [], match_percentage: 0 },
+        keywords: item.keywords || { matched: [], missing: [], match_percentage: 0 },
+      })
+      const explanationJson = JSON.stringify({
+        text: item.explanation || '',
+      })
+
+      upsertStmt.run(
+        randomUUID(),
+        applicationId,
+        drive.id,
+        item.student_id,
+        Number(item.semantic_score || 0),
+        skillOverlapJson,
+        explanationJson
+      )
+    }
+  })
+
+  upsertTx(results)
+
+  return res.json({ updated: results.length, results })
+})
+
 
 app.patch('/api/tp/applications/:id/status', requireAuth, requireRole('T&P Officer'), (req, res) => {
   const status = req.body?.status
@@ -618,7 +1187,7 @@ app.get('/api/tp/applications/:id/certificates', requireAuth, requireRole('T&P O
 
 app.get('/api/tp/students', requireAuth, requireRole('T&P Officer'), (_req, res) => {
   const rows = db.prepare(`
-    SELECT u.id, u.name, u.email, u.branch, u.cgpa, u.backlogs, u.skills_json,
+    SELECT u.id, u.name, u.email, u.branch, u.cgpa, u.backlogs, u.skills_json, u.academic_year, u.passout_year,
       EXISTS(SELECT 1 FROM resumes r WHERE r.student_id = u.id) AS has_resume,
       EXISTS(SELECT 1 FROM scorecards sc WHERE sc.student_id = u.id) AS has_scorecard,
       (SELECT COUNT(*) FROM certificates c WHERE c.student_id = u.id) AS certificate_count
@@ -632,6 +1201,7 @@ app.get('/api/tp/students', requireAuth, requireRole('T&P Officer'), (_req, res)
       name: row.name,
       email: row.email,
       branch: row.branch,
+      academicYear: row.academic_year || (row.passout_year === 2026 ? 'Final Year' : row.passout_year === 2027 ? 'Third Year' : row.passout_year === 2028 ? 'Second Year' : row.passout_year === 2029 ? 'First Year' : ''),
       cgpa: row.cgpa,
       backlogs: row.backlogs,
       skills: parseJson(row.skills_json),
@@ -1252,10 +1822,307 @@ app.post('/api/chat/conversations/:id/read', requireAuth, requireRole('Student',
   res.json({ success: true })
 })
 
+// =============================================================
+// Placement Statistics & AI Graph Analytics Endpoints
+// =============================================================
+
+function sanitizeParam(val, fallback = 'All') {
+  if (!val || typeof val !== 'string') return fallback
+  const clean = val.trim()
+  return clean || fallback
+}
+
+// GET /api/analytics/placement-stats
+app.get('/api/analytics/placement-stats', requireAuth, (req, res) => {
+  try {
+    const academicYear = sanitizeParam(req.query.academic_year || req.query.academicYear)
+    const branch = sanitizeParam(req.query.branch)
+    const company = sanitizeParam(req.query.company)
+    const batch = sanitizeParam(req.query.batch)
+    const demoMode = req.query.demo_mode === undefined && req.query.demoMode === undefined
+      ? true
+      : (req.query.demo_mode === 'true' || req.query.demoMode === 'true' || req.query.demo_mode === true || req.query.demoMode === true)
+
+    const analytics = getPlacementAnalytics({
+      academicYear,
+      branch,
+      company,
+      batch,
+      demoMode,
+    })
+
+    res.json({ success: true, ...analytics })
+  } catch (error) {
+    console.error('Error computing placement analytics:', error)
+    res.status(500).json({ error: 'Failed to retrieve placement analytics.' })
+  }
+})
+
+// POST /api/analytics/ai-insights
+app.post('/api/analytics/ai-insights', requireAuth, async (req, res) => {
+  try {
+    const aggregatedStats = req.body?.aggregatedStats || req.body || {}
+    const insights = await generatePlacementInsights(aggregatedStats)
+    res.json({ success: true, ...insights })
+  } catch (error) {
+    console.error('Error generating AI placement insights:', error)
+    res.json({
+      success: true,
+      executive_summary: 'Placement data processed. AI microservice is currently unreachable, presenting baseline statistical overview.',
+      key_observations: [
+        'Placement trends remain steady across engineering branches.',
+        'Core and software companies continue consistent campus recruitment.',
+      ],
+      improvement_areas: [
+        'Maintain balanced participation across all academic departments.',
+      ],
+      student_preparation_guidance: [
+        'Practice data structures, system design, and algorithmic problem-solving.',
+        'Focus on full-stack web technologies and relevant internship experience.',
+      ],
+      status: 'fallback',
+      source: 'backend-rules',
+    })
+  }
+})
+
+// GET /api/analytics/export
+app.get('/api/analytics/export', requireAuth, (req, res) => {
+  try {
+    const academicYear = sanitizeParam(req.query.academic_year || req.query.academicYear)
+    const branch = sanitizeParam(req.query.branch)
+    const company = sanitizeParam(req.query.company)
+    const batch = sanitizeParam(req.query.batch)
+    const demoMode = req.query.demo_mode === undefined && req.query.demoMode === undefined
+      ? true
+      : (req.query.demo_mode === 'true' || req.query.demoMode === 'true' || req.query.demo_mode === true || req.query.demoMode === true)
+
+    const records = getPlacementRecordsForExport({
+      academicYear,
+      branch,
+      company,
+      batch,
+      demoMode,
+    })
+
+    const escapeCsv = (str) => {
+      if (str === null || str === undefined) return ''
+      const s = String(str)
+      if (s.includes(',') || s.includes('"') || s.includes('\n')) {
+        return `"${s.replace(/"/g, '""')}"`
+      }
+      return s
+    }
+
+    const headers = [
+      'Student Identifier',
+      'Student Name',
+      'Branch',
+      'Company',
+      'Role',
+      'Package (LPA)',
+      'Academic Year',
+      'Batch',
+      'Placed Date',
+    ]
+
+    const csvRows = [headers.join(',')]
+    for (const r of records) {
+      csvRows.push([
+        escapeCsv(r.studentIdentifier),
+        escapeCsv(r.studentName),
+        escapeCsv(r.branch),
+        escapeCsv(r.company),
+        escapeCsv(r.role),
+        escapeCsv(r.packageLpa),
+        escapeCsv(r.academicYear),
+        escapeCsv(r.batchYear),
+        escapeCsv(r.placedDate),
+      ].join(','))
+    }
+
+    const csvContent = csvRows.join('\r\n')
+    const filename = `placement-report-${academicYear.toLowerCase().replace(/[^a-z0-9]/g, '-')}-${Date.now()}.csv`
+
+    res.setHeader('Content-Type', 'text/csv; charset=utf-8')
+    res.setHeader('Content-Disposition', `attachment; filename="${filename}"`)
+    res.status(200).send(csvContent)
+  } catch (error) {
+    console.error('Error exporting placement report:', error)
+    res.status(500).json({ error: 'Failed to generate CSV export.' })
+  }
+})
+
+// =============================================================
+// Notice Board & Announcements Routes
+// =============================================================
+
+// GET /api/notices - List notices with tab, category, priority, and search filters
+app.get('/api/notices', requireAuth, (req, res) => {
+  try {
+    const notices = getNotices(req.user, req.query)
+    res.json({ success: true, notices })
+  } catch (error) {
+    console.error('Error fetching notices:', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to fetch notices.' })
+  }
+})
+
+// GET /api/notices/:id - Retrieve announcement details and record read
+app.get('/api/notices/:id', requireAuth, (req, res) => {
+  try {
+    const notice = getNoticeById(req.params.id, req.user)
+    res.json({ success: true, notice })
+  } catch (error) {
+    console.error('Error fetching notice details:', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to fetch notice details.' })
+  }
+})
+
+// POST /api/notices - Create announcement (T&P Officer or Alumni only)
+app.post('/api/notices', requireAuth, (req, res) => {
+  if (req.user.role === 'Student') {
+    return res.status(403).json({ error: 'Students are not permitted to publish announcements.' })
+  }
+
+  noticeAttachmentUpload.single('attachment')(req, res, (uploadErr) => {
+    if (uploadErr) {
+      return res.status(400).json({ error: uploadErr.message || 'Attachment upload failed.' })
+    }
+
+    try {
+      const notice = createAnnouncement(req.user, req.body, req.file)
+      res.status(201).json({ success: true, notice })
+    } catch (error) {
+      if (req.file) {
+        fs.rm(path.join(uploadDirectory, req.file.filename), { force: true }, () => {})
+      }
+      console.error('Error publishing notice:', error)
+      res.status(error.status || 500).json({ error: error.message || 'Failed to publish announcement.' })
+    }
+  })
+})
+
+// PUT /api/notices/:id - Edit announcement (T&P Officer or original Alumni author)
+app.put('/api/notices/:id', requireAuth, (req, res) => {
+  if (req.user.role === 'Student') {
+    return res.status(403).json({ error: 'Students are not permitted to edit announcements.' })
+  }
+
+  noticeAttachmentUpload.single('attachment')(req, res, (uploadErr) => {
+    if (uploadErr) {
+      return res.status(400).json({ error: uploadErr.message || 'Attachment upload failed.' })
+    }
+
+    try {
+      const notice = updateAnnouncement(req.params.id, req.user, req.body, req.file)
+      res.json({ success: true, notice })
+    } catch (error) {
+      if (req.file) {
+        fs.rm(path.join(uploadDirectory, req.file.filename), { force: true }, () => {})
+      }
+      console.error('Error updating notice:', error)
+      res.status(error.status || 500).json({ error: error.message || 'Failed to update announcement.' })
+    }
+  })
+})
+
+// PATCH /api/notices/:id/archive - Archive or unarchive an announcement
+app.patch('/api/notices/:id/archive', requireAuth, requireRole('T&P Officer', 'Alumni'), (req, res) => {
+  try {
+    const isArchived = req.body?.isArchived !== undefined ? Boolean(req.body.isArchived) : true
+    const result = archiveAnnouncement(req.params.id, req.user, isArchived)
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('Error archiving notice:', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to update notice archive status.' })
+  }
+})
+
+// POST /api/notices/:id/toggle-read - Mark notice as read / unread
+app.post('/api/notices/:id/toggle-read', requireAuth, (req, res) => {
+  try {
+    const result = toggleNoticeRead(req.params.id, req.user, req.body?.isRead)
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('Error toggling read status:', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to update read status.' })
+  }
+})
+
+// GET /api/notices/:id/attachment - Download notice attachment
+app.get('/api/notices/:id/attachment', requireAuth, (req, res) => {
+  try {
+    const notice = db.prepare('SELECT * FROM announcements WHERE id = ?').get(req.params.id)
+    if (!notice || !notice.attachment_stored_name) {
+      return res.status(404).json({ error: 'No attachment found for this announcement.' })
+    }
+
+    const filePath = path.join(uploadDirectory, notice.attachment_stored_name)
+    if (!fs.existsSync(filePath)) {
+      return res.status(404).json({ error: 'Attachment file not found on server.' })
+    }
+
+    const downloadName = notice.attachment_original_name || 'attachment.pdf'
+    res.download(filePath, downloadName)
+  } catch (error) {
+    console.error('Error downloading notice attachment:', error)
+    res.status(500).json({ error: 'Failed to download attachment.' })
+  }
+})
+
+// GET /api/notices/:id/stats - Read stats for T&P or author
+app.get('/api/notices/:id/stats', requireAuth, requireRole('T&P Officer', 'Alumni'), (req, res) => {
+  try {
+    const stats = getNoticeStats(req.params.id, req.user)
+    res.json({ success: true, stats })
+  } catch (error) {
+    console.error('Error fetching notice stats:', error)
+    res.status(error.status || 500).json({ error: error.message || 'Failed to fetch notice statistics.' })
+  }
+})
+
+// =============================================================
+// Notification System Routes
+// =============================================================
+
+// GET /api/notifications - Get user notifications and unread count
+app.get('/api/notifications', requireAuth, (req, res) => {
+  try {
+    const data = getUserNotifications(req.user.id)
+    res.json({ success: true, ...data })
+  } catch (error) {
+    console.error('Error fetching notifications:', error)
+    res.status(500).json({ error: 'Failed to fetch notifications.' })
+  }
+})
+
+// PATCH /api/notifications/:id/read - Mark single notification as read
+app.patch('/api/notifications/:id/read', requireAuth, (req, res) => {
+  try {
+    const result = markNotificationRead(req.params.id, req.user.id)
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('Error marking notification as read:', error)
+    res.status(500).json({ error: 'Failed to update notification.' })
+  }
+})
+
+// POST /api/notifications/mark-all-read - Mark all notifications as read
+app.post('/api/notifications/mark-all-read', requireAuth, (req, res) => {
+  try {
+    const result = markAllNotificationsRead(req.user.id)
+    res.json({ success: true, ...result })
+  } catch (error) {
+    console.error('Error marking all notifications as read:', error)
+    res.status(500).json({ error: 'Failed to mark notifications as read.' })
+  }
+})
+
 app.use((error, _req, res, _next) => {
   if (error instanceof multer.MulterError) return res.status(400).json({ error: error.code === 'LIMIT_FILE_SIZE' ? 'Resume must be 2 MB or smaller.' : 'Resume upload failed.' })
   console.error(error)
   return res.status(500).json({ error: 'The server could not complete this request.' })
 })
 
-app.listen(port, host, () => console.log(`CareerCompass API listening at http://${host}:${port}`))
+app.listen(port, host, () => console.log(`CareerBridge API listening at http://${host}:${port}`))

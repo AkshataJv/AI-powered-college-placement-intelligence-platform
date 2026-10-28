@@ -1,17 +1,17 @@
 -- =============================================================
--- CareerCompass AI — MySQL Schema (FastAPI / Python Backend)
+-- CareerBridge AI — MySQL Schema (FastAPI / Python Backend)
 -- Used by: backend/app/ via SQLAlchemy ORM
--- Database: careercompass (MySQL 8.x)
+-- Database: careerbridge (MySQL 8.x)
 -- Tables are created automatically by SQLAlchemy on startup
 -- NEVER run DROP or TRUNCATE manually on production data
 -- =============================================================
 
 -- Create the database (run once in MySQL Workbench):
-CREATE DATABASE IF NOT EXISTS careercompass
+CREATE DATABASE IF NOT EXISTS careerbridge
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 
-USE careercompass;
+USE careerbridge;
 
 -- ─── Users ───────────────────────────────────────────────────
 -- Roles: student | alumni | tp_cell

@@ -1,4 +1,4 @@
-"""CareerCompass FastAPI application entry point."""
+"""CareerBridge FastAPI application entry point."""
 
 from contextlib import asynccontextmanager
 import logging
@@ -16,7 +16,7 @@ from app.database import Base, engine
 from app.routers import alumni, announcements, applications, auth, companies, mentorship, roadmap, resumes, skills, students, tp_cell
 
 logging.basicConfig(level=os.getenv("LOG_LEVEL", "INFO"))
-logger = logging.getLogger("careercompass")
+logger = logging.getLogger("careerbridge")
 
 cors_origins = [
     origin.strip()
@@ -33,14 +33,14 @@ async def lifespan(_app: FastAPI):
     else:
         try:
             Base.metadata.create_all(bind=engine)
-            logger.info("CareerCompass MySQL schema is ready.")
+            logger.info("CareerBridge MySQL schema is ready.")
         except SQLAlchemyError:
             logger.exception("MySQL schema initialization failed; API remains available for diagnostics.")
     yield
 
 
 app = FastAPI(
-    title="CareerCompass API",
+    title="CareerBridge API",
     description="College placement, student readiness, alumni mentorship, and T&P management API.",
     version="1.0.0",
     openapi_tags=[
@@ -85,7 +85,7 @@ app.include_router(tp_cell.tp_cell_router)
 
 @app.get("/", tags=["Health"])
 def root() -> dict[str, str]:
-    return {"message": "CareerCompass Backend is running"}
+    return {"message": "CareerBridge Backend is running"}
 
 
 @app.get("/api/health", tags=["Health"])
@@ -104,4 +104,4 @@ def health() -> dict[str, str]:
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="MySQL is unavailable. Verify the local MySQL Server and DATABASE_URL.",
         ) from error
-    return {"status": "ok", "service": "CareerCompass API"}
+    return {"status": "ok", "service": "CareerBridge API"}

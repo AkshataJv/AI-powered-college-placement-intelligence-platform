@@ -1,4 +1,4 @@
-# CareerCompass AI — Database Documentation
+# CareerBridge AI — Database Documentation
 
 ## Overview
 
@@ -6,14 +6,14 @@ The project uses **two separate databases** during development:
 
 | Layer | Database | Engine | Used By |
 |-------|----------|--------|---------|
-| Node.js API | SQLite (`data/career-compass.sqlite`) | better-sqlite3 | `server/index.js` |
-| FastAPI | MySQL (`careercompass`) | SQLAlchemy + PyMySQL | `backend/app/` |
+| Node.js API | SQLite (`data/career-bridge.sqlite`) | better-sqlite3 | `server/index.js` |
+| FastAPI | MySQL (`careerbridge`) | SQLAlchemy + PyMySQL | `backend/app/` |
 
 ---
 
 ## SQLite Database (Node.js Server)
 
-**File:** `data/career-compass.sqlite`  
+**File:** `data/career-bridge.sqlite`  
 **Schema:** [`sqlite-schema.sql`](./sqlite-schema.sql)  
 **Created by:** `server/db.js` automatically on first startup
 
@@ -35,13 +35,13 @@ The project uses **two separate databases** during development:
 
 ## MySQL Database (FastAPI Backend)
 
-**Database:** `careercompass`  
+**Database:** `careerbridge`  
 **Schema:** [`mysql-schema.sql`](./mysql-schema.sql)  
 **Created by:** SQLAlchemy's `Base.metadata.create_all()` on FastAPI startup
 
 ### Setup
 ```sql
-CREATE DATABASE careercompass
+CREATE DATABASE careerbridge
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 ```
@@ -64,7 +64,7 @@ CREATE DATABASE careercompass
 ### Configuration
 See `backend/.env` for `DATABASE_URL`. Format:
 ```
-DATABASE_URL=mysql+pymysql://root:PASSWORD@localhost:3306/careercompass
+DATABASE_URL=mysql+pymysql://root:PASSWORD@localhost:3306/careerbridge
 ```
 
 > ⚠️ Never run `DROP DATABASE`, `DROP TABLE`, `DELETE FROM`, or `TRUNCATE` on production data.

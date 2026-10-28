@@ -1,7 +1,7 @@
 -- =============================================================
--- CareerCompass AI — SQLite Schema (Node.js / Express Server)
+-- CareerBridge AI — SQLite Schema (Node.js / Express Server)
 -- Used by: server/db.js via better-sqlite3
--- Database file: data/career-compass.sqlite
+-- Database file: data/career-bridge.sqlite
 -- =============================================================
 
 -- Users table: students, T&P officers, alumni
@@ -175,6 +175,56 @@ CREATE TABLE IF NOT EXISTS messages (
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
 
+-- AI Resume parsed text and structured sections
+CREATE TABLE IF NOT EXISTS resume_analysis (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  parsed_text TEXT NOT NULL DEFAULT '',
+  parsed_skills_json TEXT NOT NULL DEFAULT '[]',
+  parsed_experience_json TEXT NOT NULL DEFAULT '[]',
+  parsed_education_json TEXT NOT NULL DEFAULT '[]',
+  word_count INTEGER NOT NULL DEFAULT 0,
+  parsed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  source_stored_name TEXT NOT NULL DEFAULT '',
+  UNIQUE (student_id)
+);
+
+-- AI Semantic & Skill Match Scores for applications
+CREATE TABLE IF NOT EXISTS ai_match_scores (
+  id TEXT PRIMARY KEY,
+  application_id TEXT REFERENCES applications(id) ON DELETE CASCADE,
+  drive_id TEXT NOT NULL REFERENCES drives(id) ON DELETE CASCADE,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  semantic_score REAL NOT NULL DEFAULT 0,
+  skill_overlap_json TEXT NOT NULL DEFAULT '{}',
+  explanation_json TEXT NOT NULL DEFAULT '{}',
+  model_version TEXT NOT NULL DEFAULT 'v1',
+  computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (drive_id, student_id)
+);
+
+-- AI Placement prediction probabilities & feature importance
+CREATE TABLE IF NOT EXISTS placement_predictions (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  probability REAL NOT NULL,
+  top_factors_json TEXT NOT NULL DEFAULT '[]',
+  model_version TEXT NOT NULL DEFAULT 'v1',
+  computed_at TEXT NOT NULL DEFAULT (datetime('now')),
+  UNIQUE (student_id)
+);
+
+-- AI Resume feedback, ATS scores, and missing skill analysis
+CREATE TABLE IF NOT EXISTS resume_feedback (
+  id TEXT PRIMARY KEY,
+  student_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  drive_id TEXT REFERENCES drives(id) ON DELETE CASCADE,
+  feedback_text TEXT NOT NULL DEFAULT '',
+  missing_skills_json TEXT NOT NULL DEFAULT '[]',
+  ats_score REAL NOT NULL DEFAULT 0,
+  generated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
 -- Indexes for query performance
 CREATE INDEX IF NOT EXISTS drives_owner_idx ON drives(owner_id);
 CREATE INDEX IF NOT EXISTS certificates_student_idx ON certificates(student_id, issue_date DESC);
@@ -187,4 +237,10 @@ CREATE INDEX IF NOT EXISTS conversations_student_idx ON conversations(student_id
 CREATE INDEX IF NOT EXISTS conversations_alumni_idx ON conversations(alumni_id);
 CREATE INDEX IF NOT EXISTS messages_conversation_idx ON messages(conversation_id, created_at ASC);
 CREATE INDEX IF NOT EXISTS messages_sender_idx ON messages(sender_id);
+CREATE INDEX IF NOT EXISTS resume_analysis_student_idx ON resume_analysis(student_id);
+CREATE INDEX IF NOT EXISTS ai_match_scores_drive_idx ON ai_match_scores(drive_id);
+CREATE INDEX IF NOT EXISTS ai_match_scores_student_idx ON ai_match_scores(student_id);
+CREATE INDEX IF NOT EXISTS placement_predictions_student_idx ON placement_predictions(student_id);
+CREATE INDEX IF NOT EXISTS resume_feedback_student_idx ON resume_feedback(student_id);
+CREATE INDEX IF NOT EXISTS resume_feedback_drive_idx ON resume_feedback(drive_id);
 

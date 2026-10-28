@@ -1,4 +1,4 @@
-# CareerCompass AI — Project Notes
+# CareerBridge AI — Project Notes
 
 ## Architecture Decisions
 
@@ -35,7 +35,7 @@ frontend/src/
 - `node_modules/` stays at the project root (shared by Vite + Node.js server)
 
 ### Database Files
-- SQLite database: `data/career-compass.sqlite` (excluded from Git)
+- SQLite database: `data/career-bridge.sqlite` (excluded from Git)
 - MySQL: managed by SQLAlchemy in the FastAPI backend
 - Schema docs: `database/sqlite-schema.sql` and `database/mysql-schema.sql`
 

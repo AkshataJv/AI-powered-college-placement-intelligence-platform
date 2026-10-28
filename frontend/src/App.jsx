@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { apiRequest, clearSession, downloadProtectedFile, getSession, protectedFileUrl, saveSession } from './api'
 import {
   AlumniEditProfileTabPanel,
@@ -7,9 +7,12 @@ import {
   ConnectionRequestsView,
   PrivateChatView,
 } from './ChatComponents'
+import { PlacementAnalytics } from './PlacementAnalytics'
+import { NoticeBoard, NotificationBell } from './NoticeBoard'
 import './App.css'
 
 const branches = ['All branches', 'CSE', 'IT', 'ECE', 'EEE', 'MECH', 'CIVIL', 'AIDS', 'AIML']
+const ACADEMIC_YEARS = ['First Year', 'Second Year', 'Third Year', 'Final Year']
 const roleRoutes = { Student: '/student', 'T&P Officer': '/tp', Alumni: '/alumni' }
 
 function formatDate(date) {
@@ -29,7 +32,39 @@ function BrandMark() {
   )
 }
 
-function Header({ user, onSignOut, activeAlumniTab, onSelectAlumniTab }) {
+function ThemeToggle({ theme, onToggle }) {
+  const isDark = theme === 'dark'
+  return (
+    <button
+      className="theme-toggle-btn"
+      onClick={onToggle}
+      type="button"
+      aria-label={`Switch to ${isDark ? 'light' : 'dark'} mode`}
+      title={`Switch to ${isDark ? 'light' : 'dark'} mode`}
+    >
+      {isDark ? (
+        <svg className="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <circle cx="12" cy="12" r="5" />
+          <line x1="12" y1="1" x2="12" y2="3" />
+          <line x1="12" y1="21" x2="12" y2="23" />
+          <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+          <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+          <line x1="1" y1="12" x2="3" y2="12" />
+          <line x1="21" y1="12" x2="23" y2="12" />
+          <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+          <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+        </svg>
+      ) : (
+        <svg className="theme-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+          <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+        </svg>
+      )}
+      <span className="theme-label">{isDark ? 'Light' : 'Dark'}</span>
+    </button>
+  )
+}
+
+function Header({ user, onSignOut, activeAlumniTab, onSelectAlumniTab, theme, onToggleTheme }) {
   const isAlumniProfileActive = window.location.pathname === '/alumni' && (activeAlumniTab === 'Profile' || activeAlumniTab === 'My Profile' || (typeof window !== 'undefined' && window.location.search.includes('tab=profile')))
   const isAlumniHubActive = window.location.pathname === '/alumni' && !isAlumniProfileActive
 
@@ -49,9 +84,11 @@ function Header({ user, onSignOut, activeAlumniTab, onSelectAlumniTab }) {
       <header className="site-header">
         <a className="brand" href="/">
           <BrandMark />
-          <span>CareerCompass <b>AI</b></span>
+          <span>CareerBridge <b>AI</b></span>
         </a>
         <div className="header-actions">
+          <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+          {user && <NotificationBell user={user} />}
           {user ? (
             <>
               <span className="signed-in">{user.name || user.role}</span>
@@ -66,7 +103,12 @@ function Header({ user, onSignOut, activeAlumniTab, onSelectAlumniTab }) {
         </div>
       </header>
       <nav className="site-nav" aria-label="Main navigation">
-        {[{ label: 'Drives', href: '/' }, ...roleLinks].map((item) => {
+        {[
+          { label: 'Drives', href: '/' },
+          { label: 'Notice Board', href: '/notices' },
+          ...roleLinks,
+          { label: 'Placement Stats', href: '/analytics' },
+        ].map((item) => {
           const isActive = item.isSpecialActive !== undefined
             ? item.isSpecialActive
             : window.location.pathname === item.href
@@ -101,9 +143,87 @@ function Header({ user, onSignOut, activeAlumniTab, onSelectAlumniTab }) {
   )
 }
 
-function DriveCard({ drive }) {
+function getEligibilityDetails(drive, profile) {
+  if (!profile) {
+    return {
+      status: 'Eligibility Unconfirmed',
+      reason: 'Sign in with a student account to confirm your eligibility.',
+      isEligible: false,
+      checks: null,
+    }
+  }
+
+  const studentYear = profile.academicYear || ''
+  const hasYear = Boolean(studentYear && ACADEMIC_YEARS.includes(studentYear))
+  const hasBranch = Boolean(profile.branch)
+  const hasCgpa = typeof profile.cgpa === 'number' && !isNaN(profile.cgpa)
+  const hasBacklogs = typeof profile.backlogs === 'number' && !isNaN(profile.backlogs)
+
+  const eligibleYears = Array.isArray(drive.eligibleYears) && drive.eligibleYears.length
+    ? drive.eligibleYears
+    : ['Final Year']
+
+  if (!hasYear) {
+    return {
+      status: 'Eligibility Unconfirmed',
+      reason: 'Academic year is not set in your profile. Please update your profile to confirm eligibility.',
+      isEligible: false,
+      checks: {
+        year: { ok: false, missing: true, expected: eligibleYears, actual: 'Not set' },
+        branch: { ok: hasBranch && drive.branches.includes(profile.branch), missing: !hasBranch, expected: drive.branches, actual: profile.branch || 'Not set' },
+        cgpa: { ok: hasCgpa && profile.cgpa >= drive.cgpa, missing: !hasCgpa, expected: drive.cgpa, actual: profile.cgpa },
+        backlogs: { ok: hasBacklogs && profile.backlogs <= drive.backlogs, missing: !hasBacklogs, expected: drive.backlogs, actual: profile.backlogs },
+      },
+    }
+  }
+
+  const yearOk = eligibleYears.includes(studentYear)
+  const branchOk = drive.branches.includes(profile.branch)
+  const cgpaOk = profile.cgpa >= drive.cgpa
+  const backlogsOk = profile.backlogs <= drive.backlogs
+
+  const isEligible = yearOk && branchOk && cgpaOk && backlogsOk
+
+  const failedReasons = []
+  if (!yearOk) failedReasons.push(`Year (${studentYear}) not eligible`)
+  if (!branchOk) failedReasons.push(`Branch (${profile.branch}) not eligible`)
+  if (!cgpaOk) failedReasons.push(`CGPA (${Number(profile.cgpa).toFixed(2)} < ${drive.cgpa})`)
+  if (!backlogsOk) failedReasons.push(`Backlogs (${profile.backlogs} > ${drive.backlogs})`)
+
+  return {
+    status: isEligible ? 'Eligible' : 'Not Eligible',
+    reason: isEligible
+      ? 'You meet all academic year, branch, CGPA, and backlog criteria for this drive.'
+      : `Criteria unmet: ${failedReasons.join(', ')}.`,
+    isEligible,
+    checks: {
+      year: { ok: yearOk, missing: false, expected: eligibleYears, actual: studentYear },
+      branch: { ok: branchOk, missing: false, expected: drive.branches, actual: profile.branch },
+      cgpa: { ok: cgpaOk, missing: false, expected: drive.cgpa, actual: profile.cgpa },
+      backlogs: { ok: backlogsOk, missing: false, expected: drive.backlogs, actual: profile.backlogs },
+    },
+  }
+}
+
+function DriveCard({ drive, user, profile }) {
+  const isStudent = user?.role === 'Student'
+  const eligibility = isStudent ? getEligibilityDetails(drive, profile) : null
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const isPastVisit = drive.status === 'Closed' || (Boolean(drive.deadline) && drive.deadline < todayStr)
+
   return (
-    <article className="drive-card">
+    <article className={`drive-card ${isPastVisit ? 'past-visit-card' : ''}`}>
+      <div className="drive-card-header-bar">
+        <span className={`drive-type-badge ${isPastVisit ? 'historical' : 'upcoming'}`}>
+          {isPastVisit ? '🏛️ Past Campus Visit' : '🎯 Upcoming Drive'}
+        </span>
+        {isStudent && (
+          <span className={`eligibility-badge ${eligibility.status === 'Eligible' ? 'eligible' : eligibility.status === 'Not Eligible' ? 'not-eligible' : 'unconfirmed'}`}>
+            {eligibility.status === 'Eligible' ? '✓ Eligible' : eligibility.status === 'Not Eligible' ? '✕ Not Eligible' : '⚠️ Unconfirmed'}
+          </span>
+        )}
+      </div>
+
       <div className="drive-card-top">
         <div>
           <p className="company-name">{drive.company}</p>
@@ -114,33 +234,72 @@ function DriveCard({ drive }) {
           <span>CTC</span>
         </div>
       </div>
+
+      <div className="academic-years-tags">
+        <span className="years-label">Eligible:</span>
+        <div className="years-pills">
+          {(drive.eligibleYears || ['Final Year']).map((yr) => (
+            <span key={yr} className="year-pill-tag">{yr}</span>
+          ))}
+        </div>
+      </div>
+
       <div className="eligibility-tags">
         <span>Min CGPA {drive.cgpa}</span>
         <span>Backlogs ≤ {drive.backlogs}</span>
+        <span>{drive.branches.join(', ')}</span>
       </div>
+
       <div className="skill-list" aria-label="Required skills">
         {drive.skills.map((skill) => <span className="skill-tag" key={skill}>{skill}</span>)}
       </div>
+
       <div className="drive-card-bottom">
-        <span className="deadline-label">Apply by {formatDate(drive.deadline)}</span>
-        <a className="text-link" href={`/drives/${drive.id}`}>View &amp; apply <span aria-hidden="true">↗</span></a>
+        <span className="deadline-label">
+          {isPastVisit ? `Concluded (${formatDate(drive.deadline)})` : `Apply by ${formatDate(drive.deadline)}`}
+        </span>
+        <a className="text-link" href={`/drives/${drive.id}`}>
+          {isPastVisit ? 'View criteria & prep ↗' : 'View & apply ↗'}
+        </a>
       </div>
     </article>
   )
 }
 
-function DriveListing({ driveData }) {
+function DriveListing({ driveData, user, profile }) {
   const [query, setQuery] = useState('')
   const [branch, setBranch] = useState('All branches')
+  const [academicYearFilter, setAcademicYearFilter] = useState('All Years')
+  const [driveTypeTab, setDriveTypeTab] = useState('all')
   const [sort, setSort] = useState('deadline')
   const [deadline, setDeadline] = useState('')
 
+  const todayStr = new Date().toISOString().slice(0, 10)
+
+  const upcomingDrives = driveData.filter(
+    (d) => d.status === 'Open' && (!d.deadline || d.deadline >= todayStr)
+  )
+  const historicalDrives = driveData.filter(
+    (d) => d.status === 'Closed' || (Boolean(d.deadline) && d.deadline < todayStr)
+  )
+
   const visibleDrives = driveData
     .filter((drive) => {
-      const searchText = `${drive.company} ${drive.role} ${drive.skills.join(' ')}`.toLowerCase()
-      return searchText.includes(query.toLowerCase())
-        && (branch === 'All branches' || drive.branches.includes(branch))
-        && (!deadline || drive.deadline <= deadline)
+      const isPast = drive.status === 'Closed' || (Boolean(drive.deadline) && drive.deadline < todayStr)
+      if (driveTypeTab === 'upcoming' && isPast) return false
+      if (driveTypeTab === 'historical' && !isPast) return false
+
+      const driveYears = drive.eligibleYears || ['Final Year']
+      if (academicYearFilter !== 'All Years' && !driveYears.includes(academicYearFilter)) {
+        return false
+      }
+
+      const searchText = `${drive.company} ${drive.role} ${drive.skills.join(' ')} ${driveYears.join(' ')}`.toLowerCase()
+      return (
+        searchText.includes(query.toLowerCase()) &&
+        (branch === 'All branches' || drive.branches.includes(branch)) &&
+        (!deadline || drive.deadline <= deadline)
+      )
     })
     .sort((first, second) => {
       if (sort === 'salary-high') return second.salary - first.salary
@@ -151,30 +310,84 @@ function DriveListing({ driveData }) {
 
   return (
     <main className="page-content">
-      <section className="hero-panel">
+      <section className="hero-panel college-awareness-hero">
         <div className="hero-content">
-          <p className="eyebrow">CareerCompass AI <span>·</span> Placement cell</p>
-          <h1>Placement season, decoded.</h1>
-          <p className="hero-copy">Every drive shows its eligibility gate up front, every score comes with its full breakdown, and every shortlist is a human decision.</p>
+          <p className="eyebrow">CareerBridge AI <span>·</span> College-Wide Placement Awareness</p>
+          <h1>Placement season, decoded for all years.</h1>
+          <p className="hero-copy">
+            Explore confirmed upcoming recruitment drives and historical campus visits from first year through final year.
+            Review eligibility gates, company criteria, required skills, and preparation roadmaps.
+          </p>
           <div className="hero-stats">
-            <span>{visibleDrives.length} open drives</span>
-            <span>{new Set(visibleDrives.map((drive) => drive.company)).size} companies hiring</span>
-            <span>Top CTC {visibleDrives.length ? `₹${Math.max(...visibleDrives.map((drive) => drive.salary)).toFixed(1)} LPA` : '—'}</span>
+            <span>{upcomingDrives.length} upcoming drives</span>
+            <span>{historicalDrives.length} past campus visits</span>
+            <span>{new Set(driveData.map((d) => d.company)).size} companies</span>
+            <span>Top CTC {driveData.length ? `₹${Math.max(...driveData.map((d) => d.salary)).toFixed(1)} LPA` : '—'}</span>
+          </div>
+          <div className="hero-action-links" style={{ marginTop: '16px', display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+            <a className="secondary-button" href="/placement-stats" style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
+              📊 View Campus Placement Statistics &amp; Visual Analytics ↗
+            </a>
           </div>
         </div>
       </section>
 
       <section className="drive-browser" aria-label="Placement drives">
+        <div className="drive-type-tab-row">
+          <button
+            type="button"
+            className={`tab-btn ${driveTypeTab === 'all' ? 'active' : ''}`}
+            onClick={() => setDriveTypeTab('all')}
+          >
+            All Opportunities ({driveData.length})
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${driveTypeTab === 'upcoming' ? 'active' : ''}`}
+            onClick={() => setDriveTypeTab('upcoming')}
+          >
+            🎯 Confirmed Upcoming Drives ({upcomingDrives.length})
+          </button>
+          <button
+            type="button"
+            className={`tab-btn ${driveTypeTab === 'historical' ? 'active' : ''}`}
+            onClick={() => setDriveTypeTab('historical')}
+          >
+            🏛️ Past Campus Visits &amp; Records ({historicalDrives.length})
+          </button>
+        </div>
+
         <label className="search-box">
           <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8" /><path d="m16 16 5 5" /></svg>
-          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search company or role" aria-label="Search company or role" />
+          <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search company, role, skills, or academic year" aria-label="Search company or role" />
         </label>
-        <div className="filter-row">
-          <div className="branch-filters" role="group" aria-label="Filter by branch">
-            {branches.map((item) => (
-              <button className={branch === item ? 'branch-chip selected' : 'branch-chip'} key={item} onClick={() => setBranch(item)} type="button">{item}</button>
-            ))}
+
+        <div className="filter-block">
+          <div className="filter-group">
+            <span className="filter-group-label">Academic Year:</span>
+            <div className="year-filters" role="group" aria-label="Filter by academic year">
+              {['All Years', ...ACADEMIC_YEARS].map((yr) => (
+                <button
+                  type="button"
+                  key={yr}
+                  className={`year-chip ${academicYearFilter === yr ? 'selected' : ''}`}
+                  onClick={() => setAcademicYearFilter(yr)}
+                >
+                  {yr}
+                </button>
+              ))}
+            </div>
           </div>
+
+          <div className="filter-group">
+            <span className="filter-group-label">Branch:</span>
+            <div className="branch-filters" role="group" aria-label="Filter by branch">
+              {branches.map((item) => (
+                <button className={branch === item ? 'branch-chip selected' : 'branch-chip'} key={item} onClick={() => setBranch(item)} type="button">{item}</button>
+              ))}
+            </div>
+          </div>
+
           <div className="sort-date-controls">
             <label className="select-wrap">
               <span className="sr-only">Sort drives</span>
@@ -191,12 +404,29 @@ function DriveListing({ driveData }) {
         </div>
 
         <div className="drive-list">
-          {visibleDrives.length ? visibleDrives.map((drive) => <DriveCard drive={drive} key={drive.id} />) : (
+          {visibleDrives.length ? (
+            visibleDrives.map((drive) => (
+              <DriveCard drive={drive} user={user} profile={profile} key={drive.id} />
+            ))
+          ) : (
             <div className="empty-state">
               <span className="empty-icon">⌕</span>
-              <h2>{driveData.length ? 'No drives match your filters' : 'No open drives yet'}</h2>
-              <p>{driveData.length ? 'Try another company, role, or branch.' : 'Placement drives will appear here after a T&P officer publishes them.'}</p>
-              {driveData.length > 0 && <button type="button" onClick={() => { setQuery(''); setBranch('All branches'); setDeadline('') }}>Clear filters</button>}
+              <h2>{driveData.length ? 'No drives match your filters' : 'No drives recorded yet'}</h2>
+              <p>{driveData.length ? 'Try selecting another academic year, branch, or clear filters.' : 'Placement drives will appear here after a T&P officer publishes them.'}</p>
+              {driveData.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setQuery('')
+                    setBranch('All branches')
+                    setAcademicYearFilter('All Years')
+                    setDriveTypeTab('all')
+                    setDeadline('')
+                  }}
+                >
+                  Clear filters
+                </button>
+              )}
             </div>
           )}
         </div>
@@ -206,36 +436,204 @@ function DriveListing({ driveData }) {
 }
 
 function DriveDetail({ drive, user, profile, isApplied, onApply }) {
-  const eligible = profile
-    && profile.cgpa >= drive.cgpa
-    && profile.backlogs <= drive.backlogs
-    && drive.branches.includes(profile.branch)
+  const isStudent = user?.role === 'Student'
+  const eligibility = isStudent ? getEligibilityDetails(drive, profile) : null
+  const todayStr = new Date().toISOString().slice(0, 10)
+  const isPastVisit = drive.status === 'Closed' || (Boolean(drive.deadline) && drive.deadline < todayStr)
 
   return (
     <main className="detail-content">
       <a className="back-link" href="/">← <span>All drives</span></a>
       <article className="detail-card">
+        <div className="drive-awareness-banner">
+          {isPastVisit ? (
+            <div className="banner-tag historical">
+              <span>🏛️ Campus Visit Archive &amp; Past Recruitment Record</span>
+              <small>This drive has concluded. Students from all academic years can review criteria, skills, and preparation roadmaps.</small>
+            </div>
+          ) : (
+            <div className="banner-tag upcoming">
+              <span>🎯 Confirmed Upcoming Placement Drive</span>
+              <small>Active campus hiring drive for eligible academic years and branches.</small>
+            </div>
+          )}
+        </div>
+
         <div className="detail-heading">
           <div>
             <p className="company-name">{drive.company}</p>
             <h1>{drive.role}</h1>
           </div>
-          <div className="detail-compensation"><span className="status-pill">Open</span><strong>₹{drive.salary.toFixed(1)} LPA</strong></div>
+          <div className="detail-compensation">
+            <span className={`status-pill ${drive.status.toLowerCase()}`}>{drive.status}</span>
+            <strong>₹{drive.salary.toFixed(1)} LPA</strong>
+          </div>
         </div>
+
+        {isStudent && (
+          <div className="eligibility-eval-panel">
+            <div className="eval-top">
+              <div>
+                <p className="section-label">Your Eligibility Status</p>
+                <div className="eval-status-display">
+                  <span className={`eligibility-badge ${eligibility.status === 'Eligible' ? 'eligible' : eligibility.status === 'Not Eligible' ? 'not-eligible' : 'unconfirmed'}`}>
+                    {eligibility.status === 'Eligible' ? '✓ Eligible' : eligibility.status === 'Not Eligible' ? '✕ Not Eligible' : '⚠️ Eligibility Unconfirmed'}
+                  </span>
+                  <span className="eval-reason">{eligibility.reason}</span>
+                </div>
+              </div>
+              {eligibility.status === 'Eligibility Unconfirmed' && (
+                <a className="primary-button compact-button" href="/student">
+                  Update Profile Academic Year ↗
+                </a>
+              )}
+            </div>
+
+            {eligibility.checks && (
+              <div className="eligibility-checklist-grid">
+                <div className={`check-card ${eligibility.checks.year.ok ? 'pass' : eligibility.checks.year.missing ? 'warn' : 'fail'}`}>
+                  <span className="check-icon">{eligibility.checks.year.ok ? '✓' : eligibility.checks.year.missing ? '⚠️' : '✕'}</span>
+                  <div className="check-info">
+                    <strong>Academic Year</strong>
+                    <span className="check-required">Required: {(drive.eligibleYears || ['Final Year']).join(', ')}</span>
+                    <span className="check-actual">Your Year: {eligibility.checks.year.actual}</span>
+                  </div>
+                </div>
+
+                <div className={`check-card ${eligibility.checks.branch.ok ? 'pass' : eligibility.checks.branch.missing ? 'warn' : 'fail'}`}>
+                  <span className="check-icon">{eligibility.checks.branch.ok ? '✓' : eligibility.checks.branch.missing ? '⚠️' : '✕'}</span>
+                  <div className="check-info">
+                    <strong>Branch</strong>
+                    <span className="check-required">Allowed: {drive.branches.join(', ')}</span>
+                    <span className="check-actual">Your Branch: {eligibility.checks.branch.actual}</span>
+                  </div>
+                </div>
+
+                <div className={`check-card ${eligibility.checks.cgpa.ok ? 'pass' : eligibility.checks.cgpa.missing ? 'warn' : 'fail'}`}>
+                  <span className="check-icon">{eligibility.checks.cgpa.ok ? '✓' : eligibility.checks.cgpa.missing ? '⚠️' : '✕'}</span>
+                  <div className="check-info">
+                    <strong>Minimum CGPA</strong>
+                    <span className="check-required">Cutoff: {drive.cgpa} / 10.0</span>
+                    <span className="check-actual">Your CGPA: {typeof eligibility.checks.cgpa.actual === 'number' ? Number(eligibility.checks.cgpa.actual).toFixed(2) : 'Not set'}</span>
+                  </div>
+                </div>
+
+                <div className={`check-card ${eligibility.checks.backlogs.ok ? 'pass' : eligibility.checks.backlogs.missing ? 'warn' : 'fail'}`}>
+                  <span className="check-icon">{eligibility.checks.backlogs.ok ? '✓' : eligibility.checks.backlogs.missing ? '⚠️' : '✕'}</span>
+                  <div className="check-info">
+                    <strong>Backlog Rule</strong>
+                    <span className="check-required">Max: {drive.backlogs} backlogs</span>
+                    <span className="check-actual">Your Backlogs: {eligibility.checks.backlogs.actual}</span>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
         <div className="detail-facts">
+          <div><span>Eligible Years</span><strong className="fact-highlight">{(drive.eligibleYears || ['Final Year']).join(', ')}</strong></div>
+          <div><span>Eligible Branches</span><strong>{drive.branches.join(', ')}</strong></div>
           <div><span>Min CGPA</span><strong>{drive.cgpa} / 10</strong></div>
           <div><span>Max backlogs</span><strong>{drive.backlogs}</strong></div>
-          <div><span>Eligible branches</span><strong>{drive.branches.join(', ')}</strong></div>
           <div><span>Apply by</span><strong>{formatDate(drive.deadline)}</strong></div>
+          <div><span>Drive Status</span><strong>{drive.status}</strong></div>
         </div>
-        <p className="detail-description">{drive.description}</p>
+
+        <section className="detail-section">
+          <h3>Role description</h3>
+          <p className="detail-description">{drive.description}</p>
+        </section>
+
         <SkillSection title="Required skills" skills={drive.skills} />
         <SkillSection title="Preferred skills" skills={drive.preferred} tone="green" />
         <SkillSection title="JD keywords" skills={drive.keywords} tone="neutral" />
-        {user?.role === 'Student' && (
+
+        <section className="selection-process-card">
+          <div className="section-title-row">
+            <div>
+              <p className="eyebrow-dark">PREPARATION &amp; SELECTION GUIDANCE</p>
+              <h3>Selection Process &amp; Preparation Roadmap</h3>
+            </div>
+            <a className="text-link" href="/placement-stats">View Placement Statistics 📊</a>
+          </div>
+          <p className="process-intro">Students from first year through final year can use this preparation overview to get ready for hiring rounds with {drive.company}.</p>
+
+          <div className="process-stages-grid">
+            <div className="process-stage">
+              <span className="stage-num">01</span>
+              <h4>Online Assessment (OA)</h4>
+              <p>Aptitude, quantitative reasoning, and programming challenges evaluating core problem solving and speed.</p>
+              <div className="stage-skills">
+                <span className="mini-tag">Aptitude</span>
+                <span className="mini-tag">Data Structures</span>
+                <span className="mini-tag">Algorithms</span>
+              </div>
+            </div>
+
+            <div className="process-stage">
+              <span className="stage-num">02</span>
+              <h4>Technical Interview</h4>
+              <p>Live coding, system architecture, database design, and deep-dive into verified academic projects and skills.</p>
+              <div className="stage-skills">
+                <span className="mini-tag">Problem Solving</span>
+                <span className="mini-tag">Core CS</span>
+                <span className="mini-tag">Projects</span>
+              </div>
+            </div>
+
+            <div className="process-stage">
+              <span className="stage-num">03</span>
+              <h4>HR &amp; Leadership Round</h4>
+              <p>Behavioral assessment, workplace values, cultural alignment, and career aspirations discussion.</p>
+              <div className="stage-skills">
+                <span className="mini-tag">Communication</span>
+                <span className="mini-tag">Behavioral</span>
+                <span className="mini-tag">Teamwork</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        {isStudent && (
           <div className="apply-row">
-            <span>{isApplied ? 'Your application is in the review queue.' : eligible ? 'Applications are scored transparently. Shortlisting remains a human decision.' : 'Your current profile does not meet this drive’s eligibility requirements.'}</span>
-            <button className="primary-button apply-button" disabled={isApplied || !eligible} onClick={() => onApply(drive)} type="button">{isApplied ? 'Applied' : eligible ? 'Apply to this drive' : 'Not eligible'}</button>
+            <div>
+              {isApplied ? (
+                <span className="apply-status-text">Your application is in the review queue. Match scores are transparently recorded.</span>
+              ) : isPastVisit ? (
+                <span className="apply-status-text muted">This campus drive has concluded. Application submissions are closed.</span>
+              ) : eligibility.status === 'Eligibility Unconfirmed' ? (
+                <span className="apply-status-text text-warning">Academic year is required before applying. Please update your profile.</span>
+              ) : eligibility.isEligible ? (
+                <span className="apply-status-text text-success">You meet all eligibility criteria for this drive.</span>
+              ) : (
+                <span className="apply-status-text text-danger">{eligibility.reason}</span>
+              )}
+            </div>
+
+            <button
+              className="primary-button apply-button"
+              disabled={isApplied || isPastVisit || !eligibility.isEligible}
+              onClick={() => onApply(drive)}
+              type="button"
+            >
+              {isApplied
+                ? 'Applied'
+                : isPastVisit
+                  ? 'Drive Concluded'
+                  : eligibility.status === 'Eligibility Unconfirmed'
+                    ? 'Eligibility Unconfirmed'
+                    : eligibility.isEligible
+                      ? 'Apply to this drive'
+                      : 'Not eligible to apply'}
+            </button>
+          </div>
+        )}
+
+        {!user && (
+          <div className="guest-awareness-row">
+            <p>Students from 1st Year to Final Year can sign in to view personal eligibility gates, submit applications, and track opportunities.</p>
+            <a className="primary-button compact-button" href="/login">Sign in to check eligibility</a>
           </div>
         )}
       </article>
@@ -483,6 +881,7 @@ function StudentDashboard({ profile, resume, scorecard, certificates = [], onSav
       ...profile,
       name: fields.get('name'),
       branch: fields.get('branch'),
+      academicYear: fields.get('academicYear') || '',
       cgpa: Number(fields.get('cgpa')),
       backlogs: Number(fields.get('backlogs')),
       certifications: Number(fields.get('certifications')),
@@ -553,6 +952,11 @@ function StudentDashboard({ profile, resume, scorecard, certificates = [], onSav
   return (
     <main className="workspace-content">
       {notice && <div className="inline-notice" style={{ marginBottom: '18px' }}>{notice}</div>}
+      {!profile.academicYear && (
+        <div className="warning-banner" role="alert" style={{ marginBottom: '18px', padding: '14px 18px', background: 'var(--warning-subtle)', border: '1px solid var(--warning)', borderRadius: '8px', color: 'var(--text)' }}>
+          <strong>⚠️ Academic Year Required:</strong> Your eligibility for all placement drives is currently marked as <strong>Eligibility Unconfirmed</strong>. Please click "Edit profile" below to select your current academic year (First Year, Second Year, Third Year, or Final Year) so you can apply to drives.
+        </div>
+      )}
       <div className="workspace-heading">
         <div>
           <p className="eyebrow-dark">STUDENT WORKSPACE</p>
@@ -578,6 +982,14 @@ function StudentDashboard({ profile, resume, scorecard, certificates = [], onSav
               <label>Full name<input defaultValue={profile.name} name="name" required /></label>
               <div className="form-grid-two">
                 <label>Branch<select defaultValue={profile.branch} name="branch">{branches.slice(1).map((branch) => <option key={branch}>{branch}</option>)}</select></label>
+                <label>Academic Year
+                  <select defaultValue={profile.academicYear || ''} name="academicYear" required>
+                    <option value="" disabled>Select Academic Year</option>
+                    {ACADEMIC_YEARS.map((yr) => (
+                      <option key={yr} value={yr}>{yr}</option>
+                    ))}
+                  </select>
+                </label>
                 <label>CGPA<input defaultValue={profile.cgpa} max="10" min="0" name="cgpa" required step="0.01" type="number" /></label>
                 <label>Active backlogs<input defaultValue={profile.backlogs} min="0" name="backlogs" required type="number" /></label>
                 <label>Certifications<input defaultValue={profile.certifications} min="0" name="certifications" required type="number" /></label>
@@ -589,6 +1001,16 @@ function StudentDashboard({ profile, resume, scorecard, certificates = [], onSav
             <>
               <dl className="profile-facts">
                 <div><dt>Branch</dt><dd>{profile.branch}</dd></div>
+                <div>
+                  <dt>Academic Year</dt>
+                  <dd>
+                    {profile.academicYear ? (
+                      <strong>{profile.academicYear}</strong>
+                    ) : (
+                      <span className="unconfirmed-badge" style={{ color: 'var(--warning)', fontWeight: 600 }}>⚠️ Not Set (Unconfirmed)</span>
+                    )}
+                  </dd>
+                </div>
                 <div><dt>CGPA</dt><dd>{Number(profile.cgpa).toFixed(2)} / 10.0</dd></div>
                 <div><dt>Backlogs</dt><dd>{profile.backlogs}</dd></div>
                 <div><dt>Certificates</dt><dd>{certificates.length}</dd></div>
@@ -765,17 +1187,28 @@ function StudentDashboard({ profile, resume, scorecard, certificates = [], onSav
         <div className="section-heading-row"><div><p className="eyebrow-dark">YOUR ACTIVITY</p><h2>My applications</h2></div><a className="text-link" href="/">Browse drives ↗</a></div>
         {applications.length ? <div className="application-list">
           {applications.map(({ drive, score, status, applied }) => {
-            const eligible = Number(profile.cgpa) >= drive.cgpa && Number(profile.backlogs) <= drive.backlogs && drive.branches.includes(profile.branch)
+            const eligibility = getEligibilityDetails(drive, profile)
             const missingSkills = drive.skills.filter((skill) => !profile.skills.some((item) => item.toLowerCase() === skill.toLowerCase()))
             return (
               <article className="application-card" key={drive.id}>
                 <div className="application-header">
-                  <div><p className="company-name">{drive.company}</p><h3>{drive.role}</h3><p className="deadline-label">Applied {applied}</p></div>
+                  <div>
+                    <p className="company-name">{drive.company}</p>
+                    <h3>{drive.role}</h3>
+                    <p className="deadline-label">Applied {applied}</p>
+                  </div>
                   <span className={`status-pill ${status.toLowerCase().replace(' ', '-')}`}>{status}</span>
                 </div>
                 <div className="application-score-row">
-                  <div><span className="section-label">Match score</span><strong>{score?.score.toFixed(1) || '28.0'} <small>/ 100</small></strong></div>
-                  <span className={eligible ? 'eligibility-status eligible' : 'eligibility-status ineligible'}>{eligible ? 'Eligible' : 'Not eligible'}</span>
+                  <div><span className="section-label">Match score</span><strong>{score?.score !== undefined ? Number(score.score).toFixed(1) : '28.0'} <small>/ 100</small></strong></div>
+                  <span className={`eligibility-badge ${eligibility.status === 'Eligible' ? 'eligible' : eligibility.status === 'Not Eligible' ? 'not-eligible' : 'unconfirmed'}`}>
+                    {eligibility.status}
+                  </span>
+                </div>
+                <div className="application-drive-meta" style={{ display: 'flex', gap: '8px', flexWrap: 'wrap', margin: '8px 0 12px' }}>
+                  <span className="year-pill-tag">Eligible: {(drive.eligibleYears || ['Final Year']).join(', ')}</span>
+                  <span className="year-pill-tag">Min CGPA: {drive.cgpa}</span>
+                  <span className="year-pill-tag">Max Backlogs: {drive.backlogs}</span>
                 </div>
                 <div className="score-grid">
                   <ScoreMetric label="Required skills match" value={score?.required || 0} max="50" matches={score?.requiredMatches || `0 of ${drive.skills.length}`} skills={drive.skills} />
@@ -904,7 +1337,7 @@ function TPStudentDetails({ student, onViewCertificate, onDownloadCertificate, o
             <div><dt>Branch</dt><dd>{student.branch}</dd></div>
             <div><dt>CGPA</dt><dd>{Number(student.cgpa).toFixed(2)} / 10.0</dd></div>
             <div><dt>Active backlogs</dt><dd>{student.backlogs}</dd></div>
-            <div><dt>Scorecard</dt><dd>{student.hasScorecard ? <span style={{ color: 'var(--green, #15803d)' }}>✓ Uploaded</span> : <span className="resume-missing">Not uploaded</span>}</dd></div>
+            <div><dt>Scorecard</dt><dd>{student.hasScorecard ? <span style={{ color: 'var(--success)' }}>✓ Uploaded</span> : <span className="resume-missing">Not uploaded</span>}</dd></div>
             <div><dt>Certificates</dt><dd>{certCount}</dd></div>
           </dl>
 
@@ -969,7 +1402,7 @@ function TPStudentDetails({ student, onViewCertificate, onDownloadCertificate, o
             </div>
           )}
 
-          <div style={{ marginTop: '24px', paddingTop: '18px', borderTop: '1px solid #edf0f2' }}>
+          <div style={{ marginTop: '24px', paddingTop: '18px', borderTop: '1px solid var(--border-subtle)' }}>
             <div className="panel-heading" style={{ marginBottom: '12px' }}>
               <div>
                 <h2>All-Sem Scorecard</h2>
@@ -1098,13 +1531,168 @@ function TPStudentDetails({ student, onViewCertificate, onDownloadCertificate, o
   )
 }
 
-function TPCommandCenter({ driveData, studentList = [] }) {
+function EditDriveModal({ drive, onClose, onSave }) {
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [selectedYears, setSelectedYears] = useState(
+    Array.isArray(drive.eligibleYears) && drive.eligibleYears.length
+      ? drive.eligibleYears
+      : ['Final Year']
+  )
+  const [selectedBranches, setSelectedBranches] = useState(drive.branches || [])
+
+  async function handleSubmit(event) {
+    event.preventDefault()
+    const fields = new FormData(event.currentTarget)
+    if (!selectedYears.length) {
+      setError('Choose at least one eligible academic year.')
+      return
+    }
+    if (!selectedBranches.length) {
+      setError('Choose at least one eligible branch.')
+      return
+    }
+    const skills = fields.get('skills').split(',').map((s) => s.trim()).filter(Boolean)
+    if (!skills.length) {
+      setError('Add at least one required skill.')
+      return
+    }
+
+    const updatedDrive = {
+      company: fields.get('company'),
+      role: fields.get('role'),
+      salary: Number(fields.get('salary')),
+      cgpa: Number(fields.get('cgpa')),
+      backlogs: Number(fields.get('backlogs')),
+      status: fields.get('status'),
+      deadline: fields.get('deadline'),
+      description: fields.get('description'),
+      branches: selectedBranches,
+      eligibleYears: selectedYears,
+      skills,
+      preferred: fields.get('preferred').split(',').map((s) => s.trim()).filter(Boolean),
+      keywords: fields.get('keywords').split(',').map((s) => s.trim()).filter(Boolean),
+    }
+
+    setSubmitting(true)
+    setError('')
+    try {
+      await onSave(drive.id, updatedDrive)
+      onClose()
+    } catch (err) {
+      setError(err.message || 'Failed to update drive.')
+      setSubmitting(false)
+    }
+  }
+
+  return (
+    <div className="modal-backdrop" onClick={onClose} role="presentation">
+      <div className="modal-dialog edit-drive-dialog" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true">
+        <header className="modal-header">
+          <div>
+            <p className="eyebrow-dark">DRIVE MANAGEMENT</p>
+            <h2>Edit Placement Drive Eligibility &amp; Criteria</h2>
+          </div>
+          <button className="quiet-button" onClick={onClose} type="button">✕</button>
+        </header>
+
+        <form onSubmit={handleSubmit} className="edit-drive-form">
+          <div className="form-grid-two">
+            <label>Company<input defaultValue={drive.company} name="company" required /></label>
+            <label>Role title<input defaultValue={drive.role} name="role" required /></label>
+            <label>CTC (LPA)<input defaultValue={drive.salary} max="200" min="0" name="salary" required step="0.1" type="number" /></label>
+            <label>Status
+              <select defaultValue={drive.status} name="status">
+                <option value="Open">Open</option>
+                <option value="Closed">Closed</option>
+              </select>
+            </label>
+            <label>Apply by<input defaultValue={drive.deadline} name="deadline" required type="date" /></label>
+            <label>Minimum CGPA<input defaultValue={drive.cgpa} max="10" min="0" name="cgpa" required step="0.01" type="number" /></label>
+            <label>Max active backlogs<input defaultValue={drive.backlogs} min="0" name="backlogs" required type="number" /></label>
+          </div>
+
+          <label>Role description
+            <textarea defaultValue={drive.description} name="description" required rows="3" />
+          </label>
+
+          <fieldset className="year-picker">
+            <div className="picker-header">
+              <legend>Eligible academic years <span className="required-indicator">*</span></legend>
+              <div className="picker-quick-actions">
+                <button type="button" className="text-action-btn" onClick={() => setSelectedYears([...ACADEMIC_YEARS])}>Select all</button>
+                <button type="button" className="text-action-btn" onClick={() => setSelectedYears(['Final Year'])}>Final year only</button>
+                <button type="button" className="text-action-btn" onClick={() => setSelectedYears([])}>Clear</button>
+              </div>
+            </div>
+            <div className="checkbox-grid">
+              {ACADEMIC_YEARS.map((year) => (
+                <label key={year} className="checkbox-card">
+                  <input
+                    type="checkbox"
+                    checked={selectedYears.includes(year)}
+                    onChange={(e) => {
+                      if (e.target.checked) setSelectedYears([...selectedYears, year])
+                      else setSelectedYears(selectedYears.filter((y) => y !== year))
+                    }}
+                  />
+                  <span>{year}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <fieldset className="branch-picker">
+            <legend>Eligible branches <span className="required-indicator">*</span></legend>
+            <div className="checkbox-grid branches-grid">
+              {branches.slice(1).map((b) => (
+                <label key={b} className="checkbox-card">
+                  <input
+                    type="checkbox"
+                    checked={selectedBranches.includes(b)}
+                    onChange={(e) => {
+                      if (e.target.checked) setSelectedBranches([...selectedBranches, b])
+                      else setSelectedBranches(selectedBranches.filter((br) => br !== b))
+                    }}
+                  />
+                  <span>{b}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
+          <label>Required skills <small>Comma separated</small>
+            <input defaultValue={drive.skills?.join(', ')} name="skills" required />
+          </label>
+          <label>Preferred skills <small>Comma separated</small>
+            <input defaultValue={drive.preferred?.join(', ')} name="preferred" />
+          </label>
+          <label>JD keywords <small>Comma separated</small>
+            <input defaultValue={drive.keywords?.join(', ')} name="keywords" />
+          </label>
+
+          {error && <p className="form-error" role="alert">{error}</p>}
+
+          <div className="modal-actions" style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px', marginTop: '18px' }}>
+            <button className="quiet-button" onClick={onClose} type="button">Cancel</button>
+            <button className="primary-button compact-button" disabled={submitting} type="submit">
+              {submitting ? 'Saving changes…' : 'Save Drive Changes'}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  )
+}
+
+function TPCommandCenter({ driveData, studentList = [], onEditDrive }) {
   const [tab, setTab] = useState('drives')
   const [query, setQuery] = useState('')
   const [studentQuery, setStudentQuery] = useState('')
+  const [editingDrive, setEditingDrive] = useState(null)
 
   const filteredDrives = driveData.filter((drive) => `${drive.company} ${drive.role}`.toLowerCase().includes(query.toLowerCase()))
-  const filteredStudents = studentList.filter((student) => `${student.name} ${student.email} ${student.branch}`.toLowerCase().includes(studentQuery.toLowerCase()))
+  const filteredStudents = studentList.filter((student) => `${student.name} ${student.email} ${student.branch} ${student.academicYear || ''}`.toLowerCase().includes(studentQuery.toLowerCase()))
   const openDrives = driveData.filter((drive) => drive.status !== 'Closed')
   const applicationCount = driveData.reduce((sum, drive) => sum + (drive.applicantCount || 0), 0)
 
@@ -1114,7 +1702,7 @@ function TPCommandCenter({ driveData, studentList = [] }) {
         <div>
           <p className="eyebrow-dark">PLACEMENT CELL</p>
           <h1>T&amp;P Command Center</h1>
-          <p>Post drives, review student certificates, and evaluate talent pools for placement.</p>
+          <p>Post drives, configure multi-year eligibility, review student certificates, and evaluate talent pools.</p>
         </div>
         <a className="primary-link" href="/tp/create">＋ Create drive</a>
       </div>
@@ -1166,10 +1754,11 @@ function TPCommandCenter({ driveData, studentList = [] }) {
                   <th>Company</th>
                   <th>Role</th>
                   <th>CTC</th>
+                  <th>Eligible Years</th>
                   <th>Apply by</th>
                   <th>Status</th>
                   <th>Applicants</th>
-                  <th />
+                  <th>Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1178,14 +1767,26 @@ function TPCommandCenter({ driveData, studentList = [] }) {
                     <td className="table-company">{drive.company}</td>
                     <td>{drive.role}</td>
                     <td>₹{drive.salary.toFixed(1)} LPA</td>
+                    <td>
+                      <div className="table-years-tags">
+                        {(drive.eligibleYears || ['Final Year']).map((yr) => (
+                          <span key={yr} className="mini-year-tag">{yr.replace(' Year', ' Yr')}</span>
+                        ))}
+                      </div>
+                    </td>
                     <td>{formatDate(drive.deadline)}</td>
-                    <td><span className="status-pill">{drive.status}</span></td>
+                    <td><span className={`status-pill ${drive.status.toLowerCase()}`}>{drive.status}</span></td>
                     <td>{drive.applicantCount || 0}</td>
-                    <td><a className="text-link" href={`/tp/drives/${drive.id}`}>Review pool ↗</a></td>
+                    <td className="drive-actions-cell">
+                      <button className="quiet-button compact-button" onClick={() => setEditingDrive(drive)} type="button" title="Edit drive eligibility & criteria">
+                        Edit ⚙️
+                      </button>
+                      <a className="text-link" href={`/tp/drives/${drive.id}`}>Review pool ↗</a>
+                    </td>
                   </tr>
                 ))}
                 {filteredDrives.length === 0 && (
-                  <tr><td colSpan="7" className="empty-table">No drives match this search.</td></tr>
+                  <tr><td colSpan="8" className="empty-table">No drives match this search.</td></tr>
                 )}
               </tbody>
             </table>
@@ -1204,7 +1805,7 @@ function TPCommandCenter({ driveData, studentList = [] }) {
               <span className="sr-only">Search students</span>
               <input
                 onChange={(event) => setStudentQuery(event.target.value)}
-                placeholder="Search name, branch or email"
+                placeholder="Search name, branch, email or year"
                 value={studentQuery}
               />
             </label>
@@ -1215,6 +1816,7 @@ function TPCommandCenter({ driveData, studentList = [] }) {
                 <tr>
                   <th>Student</th>
                   <th>Branch</th>
+                  <th>Academic Year</th>
                   <th>CGPA</th>
                   <th>Backlogs</th>
                   <th>Certificates</th>
@@ -1230,6 +1832,13 @@ function TPCommandCenter({ driveData, studentList = [] }) {
                       <small>{student.email}</small>
                     </td>
                     <td>{student.branch}</td>
+                    <td>
+                      {student.academicYear ? (
+                        <span className="year-pill-tag">{student.academicYear}</span>
+                      ) : (
+                        <span className="resume-missing">Not set</span>
+                      )}
+                    </td>
                     <td>
                       <strong>{Number(student.cgpa).toFixed(2)}</strong>
                       {student.hasScorecard && (
@@ -1262,12 +1871,23 @@ function TPCommandCenter({ driveData, studentList = [] }) {
                   </tr>
                 ))}
                 {filteredStudents.length === 0 && (
-                  <tr><td colSpan="7" className="empty-table">No students match this search.</td></tr>
+                  <tr><td colSpan="8" className="empty-table">No students match this search.</td></tr>
                 )}
               </tbody>
             </table>
           </div>
         </section>
+      )}
+
+      {editingDrive && (
+        <EditDriveModal
+          drive={editingDrive}
+          onClose={() => setEditingDrive(null)}
+          onSave={async (id, payload) => {
+            if (onEditDrive) await onEditDrive(id, payload)
+            setEditingDrive(null)
+          }}
+        />
       )}
 
       <section className="workspace-panel command-note">
@@ -1284,26 +1904,36 @@ function TPCommandCenter({ driveData, studentList = [] }) {
 function CreateDrivePage({ onCreateDrive }) {
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  const [selectedYears, setSelectedYears] = useState(['Final Year'])
+
   async function submitDrive(event) {
     event.preventDefault()
     const fields = new FormData(event.currentTarget)
+    if (!selectedYears.length) {
+      setError('Choose at least one eligible academic year.')
+      return
+    }
+    const branchesSelected = fields.getAll('branches')
+    const skills = fields.get('skills').split(',').map((skill) => skill.trim()).filter(Boolean)
+    if (!branchesSelected.length || !skills.length) {
+      setError('Choose at least one eligible branch and add one required skill.')
+      return
+    }
+
     const drive = {
       company: fields.get('company'),
       role: fields.get('role'),
       salary: Number(fields.get('salary')),
       cgpa: Number(fields.get('cgpa')),
       backlogs: Number(fields.get('backlogs')),
-      branches: fields.getAll('branches'),
-      skills: fields.get('skills').split(',').map((skill) => skill.trim()).filter(Boolean),
+      branches: branchesSelected,
+      eligibleYears: selectedYears,
+      skills,
       preferred: fields.get('preferred').split(',').map((skill) => skill.trim()).filter(Boolean),
       keywords: fields.get('keywords').split(',').map((skill) => skill.trim()).filter(Boolean),
       deadline: fields.get('deadline'),
       description: fields.get('description'),
       status: 'Open',
-    }
-    if (!drive.branches.length || !drive.skills.length) {
-      setError('Choose at least one eligible branch and add one required skill.')
-      return
     }
     setSubmitting(true)
     try {
@@ -1317,7 +1947,13 @@ function CreateDrivePage({ onCreateDrive }) {
   return (
     <main className="workspace-content create-drive-page">
       <a className="back-link" href="/tp">← <span>T&amp;P Center</span></a>
-      <div className="workspace-heading"><div><p className="eyebrow-dark">NEW OPPORTUNITY</p><h1>Create a placement drive</h1><p>Set transparent eligibility gates before students apply.</p></div></div>
+      <div className="workspace-heading">
+        <div>
+          <p className="eyebrow-dark">NEW OPPORTUNITY</p>
+          <h1>Create a placement drive</h1>
+          <p>Set transparent academic years and eligibility gates before students apply.</p>
+        </div>
+      </div>
       <form className="workspace-panel drive-form" onSubmit={submitDrive}>
         <div className="form-section-heading"><span>01</span><div><h2>Role details</h2><p>What students need to know about the opportunity.</p></div></div>
         <div className="form-grid-two">
@@ -1327,12 +1963,51 @@ function CreateDrivePage({ onCreateDrive }) {
           <label>Apply by<input min="2026-10-03" name="deadline" required type="date" /></label>
         </div>
         <label>Role description<textarea name="description" placeholder="Describe the work, team and interview process." required rows="4" /></label>
+
         <div className="form-section-heading"><span>02</span><div><h2>Eligibility</h2><p>Make the application gate clear up front.</p></div></div>
         <div className="form-grid-two">
-          <label>Minimum CGPA<input max="10" min="0" name="cgpa" required step="0.1" type="number" /></label>
+          <label>Minimum CGPA<input max="10" min="0" name="cgpa" required step="0.01" type="number" /></label>
           <label>Maximum active backlogs<input min="0" name="backlogs" required type="number" /></label>
         </div>
-        <fieldset className="branch-picker"><legend>Eligible branches</legend><div>{branches.slice(1).map((branch) => <label key={branch}><input name="branches" type="checkbox" value={branch} />{branch}</label>)}</div></fieldset>
+
+        <fieldset className="year-picker">
+          <div className="picker-header">
+            <legend>Eligible academic years <span className="required-indicator">*</span></legend>
+            <div className="picker-quick-actions">
+              <button type="button" className="text-action-btn" onClick={() => setSelectedYears([...ACADEMIC_YEARS])}>Select all</button>
+              <button type="button" className="text-action-btn" onClick={() => setSelectedYears(['Final Year'])}>Final year only</button>
+              <button type="button" className="text-action-btn" onClick={() => setSelectedYears([])}>Clear</button>
+            </div>
+          </div>
+          <div className="checkbox-grid">
+            {ACADEMIC_YEARS.map((year) => (
+              <label key={year} className="checkbox-card">
+                <input
+                  type="checkbox"
+                  checked={selectedYears.includes(year)}
+                  onChange={(e) => {
+                    if (e.target.checked) setSelectedYears([...selectedYears, year])
+                    else setSelectedYears(selectedYears.filter((y) => y !== year))
+                  }}
+                />
+                <span>{year}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
+        <fieldset className="branch-picker">
+          <legend>Eligible branches</legend>
+          <div className="checkbox-grid branches-grid">
+            {branches.slice(1).map((branch) => (
+              <label key={branch} className="checkbox-card">
+                <input name="branches" type="checkbox" value={branch} />
+                <span>{branch}</span>
+              </label>
+            ))}
+          </div>
+        </fieldset>
+
         <div className="form-section-heading"><span>03</span><div><h2>Scoring signals</h2><p>These are shown in each student's full match breakdown.</p></div></div>
         <label>Required skills <small>Separate items with commas</small><input name="skills" placeholder="Python, SQL, communication" required /></label>
         <label>Preferred skills <small>Separate items with commas</small><input name="preferred" placeholder="AWS, Docker" /></label>
@@ -1344,11 +2019,20 @@ function CreateDrivePage({ onCreateDrive }) {
   )
 }
 
-function ApplicantReview({ drive, applicants, onUpdateStatus, onViewResume }) {
+function ApplicantReview({ drive, applicants, onUpdateStatus, onViewResume, onReloadApplicants, onEditDrive }) {
   const [query, setQuery] = useState('')
-  const visible = applicants.filter((applicant) => `${applicant.name} ${applicant.branch}`.toLowerCase().includes(query.toLowerCase())).sort((a, b) => b.score - a.score)
+  const [recomputedApplicants, setRecomputedApplicants] = useState(null)
+  const [expandedApplicantId, setExpandedApplicantId] = useState(null)
+  const [recomputing, setRecomputing] = useState(false)
+  const [recomputeError, setRecomputeError] = useState('')
   const [resumeError, setResumeError] = useState('')
   const [activeResume, setActiveResume] = useState(null)
+  const [showEditModal, setShowEditModal] = useState(false)
+
+  const activeApplicantList = recomputedApplicants || applicants
+  const visible = activeApplicantList
+    .filter((applicant) => `${applicant.name} ${applicant.branch}`.toLowerCase().includes(query.toLowerCase()))
+    .sort((a, b) => b.score - a.score)
 
   useEffect(() => () => {
     if (activeResume) URL.revokeObjectURL(activeResume.url)
@@ -1357,30 +2041,259 @@ function ApplicantReview({ drive, applicants, onUpdateStatus, onViewResume }) {
   async function openResume(applicantId) {
     try {
       const url = await onViewResume(applicantId)
-      setActiveResume({ url, name: applicants.find((applicant) => applicant.id === applicantId)?.name || 'Applicant' })
+      setActiveResume({ url, name: activeApplicantList.find((applicant) => applicant.id === applicantId)?.name || 'Applicant' })
     } catch (error) {
       setResumeError(error.message)
+    }
+  }
+
+  async function handleRecomputeAiScores() {
+    setRecomputing(true)
+    setRecomputeError('')
+    try {
+      await apiRequest(`/tp/drives/${drive.id}/recompute-ai-scores`, { method: 'POST' })
+      const res = await apiRequest(`/tp/drives/${drive.id}/applicants`)
+      if (res?.applicants) {
+        setRecomputedApplicants(res.applicants)
+      }
+      if (onReloadApplicants) {
+        await onReloadApplicants()
+      }
+    } catch {
+      setRecomputeError('AI scoring service is currently unavailable. Rule-based scores are still accurate.')
+    } finally {
+      setRecomputing(false)
     }
   }
 
   return (
     <main className="workspace-content">
       <a className="back-link" href="/tp">← <span>T&amp;P Center</span></a>
-      <div className="workspace-heading"><div><p className="eyebrow-dark">APPLICANT REVIEW</p><h1>{drive.company} · {drive.role}</h1><p>Review match signals and eligibility, then make the shortlist decision.</p></div></div>
-      <div className="metric-grid three-metrics"><Metric label="Applicants" value={applicants.length} /><Metric label="Eligible" value={applicants.filter((applicant) => applicant.cgpa >= drive.cgpa && applicant.backlogs <= drive.backlogs && drive.branches.includes(applicant.branch)).length} /><Metric label="Shortlisted" value={applicants.filter((applicant) => applicant.status === 'Shortlisted').length} /></div>
+      <div className="workspace-heading">
+        <div>
+          <p className="eyebrow-dark">APPLICANT REVIEW</p>
+          <h1>{drive.company} · {drive.role}</h1>
+          <p>Review match signals and eligibility, then make the shortlist decision.</p>
+        </div>
+        <div className="workspace-heading-actions">
+          <button
+            type="button"
+            className="quiet-button compact-button"
+            onClick={() => setShowEditModal(true)}
+            style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}
+          >
+            ⚙️ Edit Drive Eligibility
+          </button>
+          <button
+            type="button"
+            className="primary-button compact-button refresh-ai-button"
+            onClick={handleRecomputeAiScores}
+            disabled={recomputing}
+          >
+            {recomputing ? (
+              <>
+                <span className="spinner-inline" aria-hidden="true" /> Recomputing...
+              </>
+            ) : (
+              'Refresh AI Scores'
+            )}
+          </button>
+        </div>
+      </div>
+      {recomputeError && <p className="form-error ai-recompute-error" role="alert">{recomputeError}</p>}
+      <div className="metric-grid three-metrics">
+        <Metric label="Applicants" value={activeApplicantList.length} />
+        <Metric label="Eligible" value={activeApplicantList.filter((applicant) => applicant.cgpa >= drive.cgpa && applicant.backlogs <= drive.backlogs && drive.branches.includes(applicant.branch)).length} />
+        <Metric label="Shortlisted" value={activeApplicantList.filter((applicant) => applicant.status === 'Shortlisted').length} />
+      </div>
       <section className="workspace-panel">
-        <div className="section-heading-row"><div><p className="eyebrow-dark">RANKED POOL</p><h2>Applicants</h2></div><label className="compact-search"><span className="sr-only">Search applicants</span><input onChange={(event) => setQuery(event.target.value)} placeholder="Search name or branch" value={query} /></label></div>
+        <div className="section-heading-row">
+          <div><p className="eyebrow-dark">RANKED POOL</p><h2>Applicants</h2></div>
+          <label className="compact-search"><span className="sr-only">Search applicants</span><input onChange={(event) => setQuery(event.target.value)} placeholder="Search name or branch" value={query} /></label>
+        </div>
         {resumeError && <p className="form-error" role="alert">{resumeError}</p>}
-        <div className="table-scroll"><table className="data-table"><thead><tr><th>Rank</th><th>Student</th><th>Branch</th><th>CGPA</th><th>Match score</th><th>Eligibility</th><th>Resume</th><th>Certificates</th><th>Applied</th><th>Decision</th></tr></thead><tbody>
-          {visible.map((applicant, index) => {
-            const eligible = applicant.cgpa >= drive.cgpa && applicant.backlogs <= drive.backlogs && drive.branches.includes(applicant.branch)
-            return <tr key={applicant.id}><td className="rank-cell">{String(index + 1).padStart(2, '0')}</td><td className="applicant-identity"><a className="text-link" href={`/tp/students/${applicant.studentId}`}><strong>{applicant.name}</strong></a><small>{applicant.email}</small></td><td>{applicant.branch}</td><td>{applicant.cgpa.toFixed(1)}</td><td><strong>{applicant.score.toFixed(1)}</strong></td><td><span className={`eligibility-status ${eligible ? 'eligible' : 'ineligible'}`}>{eligible ? 'Eligible' : 'Not eligible'}</span></td><td>{applicant.hasResume ? <button className="resume-open-link" onClick={() => openResume(applicant.id)} type="button">View PDF ↗</button> : <span className="resume-missing">Not uploaded</span>}</td><td><a className="text-link" href={`/tp/students/${applicant.studentId}`}>{applicant.certificateCount || 0} cert{applicant.certificateCount === 1 ? '' : 's'} ↗</a></td><td>{formatDate(applicant.appliedAt)}</td><td><select aria-label={`Decision for ${applicant.name}`} onChange={(event) => onUpdateStatus(applicant.id, event.target.value)} value={applicant.status}><option>Under review</option><option>Shortlisted</option><option>Selected</option><option>Rejected</option></select></td></tr>
-          })}
-          {visible.length === 0 && <tr><td className="empty-table" colSpan="10">No applicants match this search.</td></tr>}
-        </tbody></table></div>
+        <div className="table-scroll">
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th>Rank</th>
+                <th>Student</th>
+                <th>Branch</th>
+                <th>CGPA</th>
+                <th>Match score</th>
+                <th>AI Match</th>
+                <th>Eligibility</th>
+                <th>Resume</th>
+                <th>Certificates</th>
+                <th>Applied</th>
+                <th>Decision</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visible.map((applicant, index) => {
+                const eligible = applicant.cgpa >= drive.cgpa && applicant.backlogs <= drive.backlogs && drive.branches.includes(applicant.branch)
+                const isExpanded = expandedApplicantId === applicant.id
+                const hasAiScore = applicant.aiSemanticScore !== null && applicant.aiSemanticScore !== undefined
+                const aiScoreVal = hasAiScore ? Math.round(applicant.aiSemanticScore) : null
+                const aiBadgeLevel = hasAiScore ? (aiScoreVal >= 70 ? 'success' : aiScoreVal >= 40 ? 'warning' : 'danger') : null
+
+                return (
+                  <Fragment key={applicant.id}>
+                    <tr>
+                      <td className="rank-cell">{String(index + 1).padStart(2, '0')}</td>
+                      <td className="applicant-identity">
+                        <a className="text-link" href={`/tp/students/${applicant.studentId}`}><strong>{applicant.name}</strong></a>
+                        <small>{applicant.email}</small>
+                      </td>
+                      <td>{applicant.branch}</td>
+                      <td>{applicant.cgpa.toFixed(1)}</td>
+                      <td><strong>{applicant.score.toFixed(1)}</strong></td>
+                      <td>
+                        <div className="ai-score-cell">
+                          {hasAiScore ? (
+                            <>
+                              <span className={`ai-match-badge ai-match-${aiBadgeLevel}`}>
+                                {aiScoreVal}%
+                              </span>
+                              <button
+                                type="button"
+                                className="why-score-toggle-btn"
+                                onClick={() => setExpandedApplicantId(isExpanded ? null : applicant.id)}
+                                aria-expanded={isExpanded}
+                                title={isExpanded ? 'Hide AI match breakdown' : 'Why this score?'}
+                              >
+                                Why this score? <span className="chevron-icon" aria-hidden="true">{isExpanded ? '▲' : '▼'}</span>
+                              </button>
+                            </>
+                          ) : (
+                            <span className="not-scored-label">Not scored</span>
+                          )}
+                        </div>
+                      </td>
+                      <td><span className={`eligibility-status ${eligible ? 'eligible' : 'ineligible'}`}>{eligible ? 'Eligible' : 'Not eligible'}</span></td>
+                      <td>{applicant.hasResume ? <button className="resume-open-link" onClick={() => openResume(applicant.id)} type="button">View PDF ↗</button> : <span className="resume-missing">Not uploaded</span>}</td>
+                      <td><a className="text-link" href={`/tp/students/${applicant.studentId}`}>{applicant.certificateCount || 0} cert{applicant.certificateCount === 1 ? '' : 's'} ↗</a></td>
+                      <td>{formatDate(applicant.appliedAt)}</td>
+                      <td>
+                        <select aria-label={`Decision for ${applicant.name}`} onChange={(event) => onUpdateStatus(applicant.id, event.target.value)} value={applicant.status}>
+                          <option>Under review</option>
+                          <option>Shortlisted</option>
+                          <option>Selected</option>
+                          <option>Rejected</option>
+                        </select>
+                      </td>
+                    </tr>
+                    {isExpanded && (
+                      <tr className="applicant-details-row">
+                        <td colSpan="11">
+                          <div className="ai-detail-expansion">
+                            {applicant.aiExplanation && (
+                              <div className="ai-explanation-callout">
+                                <div className="ai-explanation-header">
+                                  <span className="ai-sparkle-icon" aria-hidden="true">✨</span>
+                                  <strong>AI Match Explanation</strong>
+                                </div>
+                                <p className="ai-explanation-text">{applicant.aiExplanation}</p>
+                              </div>
+                            )}
+
+                            {applicant.aiSkillBreakdown && (
+                              <div className="ai-breakdown-container">
+                                <div className="ai-breakdown-group">
+                                  <h4 className="ai-breakdown-title">
+                                    Required Skills
+                                    <span className="ai-breakdown-ratio">
+                                      ({applicant.aiSkillBreakdown.required?.matched?.length || 0}/{(applicant.aiSkillBreakdown.required?.matched?.length || 0) + (applicant.aiSkillBreakdown.required?.missing?.length || 0)} matched)
+                                    </span>
+                                  </h4>
+                                  <div className="skill-list">
+                                    {applicant.aiSkillBreakdown.required?.matched?.map((skill, idx) => (
+                                      <span key={`req-matched-${idx}`} className="skill-tag skill-matched" title={skill.best_match && skill.best_match !== skill.target_skill ? `Matched via "${skill.best_match}" (${Math.round((skill.similarity || 0) * 100)}% similarity)` : undefined}>
+                                        ✓ {skill.target_skill}
+                                        {skill.best_match && skill.best_match.toLowerCase() !== skill.target_skill.toLowerCase() && (
+                                          <small className="skill-alias"> (via {skill.best_match})</small>
+                                        )}
+                                      </span>
+                                    ))}
+                                    {applicant.aiSkillBreakdown.required?.missing?.map((skill, idx) => (
+                                      <span key={`req-missing-${idx}`} className="skill-tag skill-missing" title={skill.closest_candidate ? `Closest match: "${skill.closest_candidate}" (${Math.round((skill.similarity || 0) * 100)}%)` : 'Missing'}>
+                                        ✕ {skill.target_skill}
+                                      </span>
+                                    ))}
+                                    {(!applicant.aiSkillBreakdown.required?.matched?.length && !applicant.aiSkillBreakdown.required?.missing?.length) && (
+                                      <span className="not-scored-label">No required skills specified</span>
+                                    )}
+                                  </div>
+                                </div>
+
+                                {(applicant.aiSkillBreakdown.preferred?.matched?.length > 0 || applicant.aiSkillBreakdown.preferred?.missing?.length > 0) && (
+                                  <div className="ai-breakdown-group">
+                                    <h4 className="ai-breakdown-title">
+                                      Preferred Skills
+                                      <span className="ai-breakdown-ratio">
+                                        ({applicant.aiSkillBreakdown.preferred?.matched?.length || 0}/{(applicant.aiSkillBreakdown.preferred?.matched?.length || 0) + (applicant.aiSkillBreakdown.preferred?.missing?.length || 0)} matched)
+                                      </span>
+                                    </h4>
+                                    <div className="skill-list">
+                                      {applicant.aiSkillBreakdown.preferred?.matched?.map((skill, idx) => (
+                                        <span key={`pref-matched-${idx}`} className="skill-tag skill-matched" title={skill.best_match && skill.best_match !== skill.target_skill ? `Matched via "${skill.best_match}"` : undefined}>
+                                          ✓ {skill.target_skill}
+                                          {skill.best_match && skill.best_match.toLowerCase() !== skill.target_skill.toLowerCase() && (
+                                            <small className="skill-alias"> (via {skill.best_match})</small>
+                                          )}
+                                        </span>
+                                      ))}
+                                      {applicant.aiSkillBreakdown.preferred?.missing?.map((skill, idx) => (
+                                        <span key={`pref-missing-${idx}`} className="skill-tag skill-missing">
+                                          ✕ {skill.target_skill}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+
+                                {applicant.aiSkillBreakdown.keywords?.matched?.length > 0 && (
+                                  <div className="ai-breakdown-group">
+                                    <h4 className="ai-breakdown-title">Relevant Keywords</h4>
+                                    <div className="skill-list">
+                                      {applicant.aiSkillBreakdown.keywords.matched.map((skill, idx) => (
+                                        <span key={`kw-matched-${idx}`} className="skill-tag skill-matched">
+                                          ✓ {skill.target_skill}
+                                        </span>
+                                      ))}
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+
+                            {!applicant.aiExplanation && !applicant.aiSkillBreakdown && (
+                              <p className="not-scored-label">No detailed AI breakdown available for this applicant.</p>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                  </Fragment>
+                )
+              })}
+              {visible.length === 0 && <tr><td className="empty-table" colSpan="11">No applicants match this search.</td></tr>}
+            </tbody>
+          </table>
+        </div>
         <p className="decision-note">Shortlisting is a human decision. Match scores explain the profile; they do not make the decision.</p>
       </section>
       {activeResume && <div className="resume-viewer-backdrop" role="presentation" onClick={() => setActiveResume(null)}><section aria-label={`${activeResume.name} resume`} aria-modal="true" className="resume-viewer-dialog" onClick={(event) => event.stopPropagation()} role="dialog"><header><div><p className="eyebrow-dark">APPLICANT RESUME</p><h2>{activeResume.name}</h2></div><button aria-label="Close resume viewer" className="quiet-button" onClick={() => setActiveResume(null)} type="button">Close</button></header><iframe src={activeResume.url} title={`${activeResume.name} resume PDF`} /></section></div>}
+      {showEditModal && (
+        <EditDriveModal
+          drive={drive}
+          onClose={() => setShowEditModal(false)}
+          onSave={async (id, payload) => {
+            if (onEditDrive) await onEditDrive(id, payload)
+            setShowEditModal(false)
+          }}
+        />
+      )}
     </main>
   )
 }
@@ -2202,7 +3115,7 @@ function ForumSection({ user, forumPosts = [], onCreateForumPost, onFetchPostRep
   )
 }
 
-function AuthPage({ mode, onAuthenticate }) {
+function AuthPage({ mode, onAuthenticate, theme, onToggleTheme }) {
   const isRegister = mode === 'register'
   const [role, setRole] = useState('Student')
   const [message, setMessage] = useState('')
@@ -2222,6 +3135,7 @@ function AuthPage({ mode, onAuthenticate }) {
       payload.role = role
       if (role === 'Student') {
         payload.branch = formData.get('branch')
+        payload.academicYear = formData.get('academicYear') || 'Final Year'
         payload.cgpa = Number(formData.get('cgpa'))
         payload.backlogs = Number(formData.get('backlogs'))
         payload.certifications = Number(formData.get('certifications'))
@@ -2246,9 +3160,16 @@ function AuthPage({ mode, onAuthenticate }) {
 
   return (
     <main className="auth-page">
+      <div className="auth-top-bar">
+        <a className="brand auth-brand" href="/">
+          <BrandMark />
+          <span>CareerBridge <b>AI</b></span>
+        </a>
+        <ThemeToggle theme={theme} onToggle={onToggleTheme} />
+      </div>
       <section className="auth-panel">
         <h1>{isRegister ? 'Create your account' : 'Sign in'}</h1>
-        <p className="auth-intro">{isRegister ? 'Create an account for your campus role.' : 'Sign in to your CareerCompass account.'}</p>
+        <p className="auth-intro">{isRegister ? 'Create an account for your campus role.' : 'Sign in to your CareerBridge account.'}</p>
         {isRegister && (
           <div className="role-options" role="group" aria-label="Choose account role">
             {['Student', 'Alumni', 'T&P Officer'].map((item) => (
@@ -2261,6 +3182,13 @@ function AuthPage({ mode, onAuthenticate }) {
           {isRegister && role === 'Student' && <>
             <div className="form-grid-two">
               <label>Branch<select defaultValue="CSE" name="branch">{branches.slice(1).map((branch) => <option key={branch}>{branch}</option>)}</select></label>
+              <label>Academic Year
+                <select defaultValue="Final Year" name="academicYear" required>
+                  {ACADEMIC_YEARS.map((yr) => (
+                    <option key={yr} value={yr}>{yr}</option>
+                  ))}
+                </select>
+              </label>
               <label>CGPA<input max="10" min="0" name="cgpa" required step="0.01" type="number" /></label>
               <label>Active backlogs<input defaultValue="0" min="0" name="backlogs" required type="number" /></label>
               <label>Certifications<input defaultValue="0" min="0" name="certifications" required type="number" /></label>
@@ -2281,6 +3209,28 @@ function AuthPage({ mode, onAuthenticate }) {
 }
 
 function App() {
+  const [theme, setTheme] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('cb-theme')
+      if (saved) return saved
+      return window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
+    }
+    return 'light'
+  })
+
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme)
+    try {
+      localStorage.setItem('cb-theme', theme)
+    } catch {}
+    const meta = document.querySelector('meta[name="theme-color"]')
+    if (meta) meta.setAttribute('content', theme === 'dark' ? '#0A1420' : '#F7F9FB')
+  }, [theme])
+
+  function toggleTheme() {
+    setTheme((prev) => (prev === 'dark' ? 'light' : 'dark'))
+  }
+
   const [user, setUser] = useState(() => getSession().user)
   const [profile, setProfile] = useState(null)
   const [resume, setResume] = useState(null)
@@ -2434,8 +3384,8 @@ function App() {
     window.location.href = '/'
   }
 
-  if (isAuth) return <AuthPage mode={path.slice(1)} onAuthenticate={authenticate} />
-  if (loading) return <main className="route-loading">Loading CareerCompass…</main>
+  if (isAuth) return <AuthPage mode={path.slice(1)} onAuthenticate={authenticate} theme={theme} onToggleTheme={toggleTheme} />
+  if (loading) return <main className="route-loading">Loading CareerBridge…</main>
   if (loadError) return <main className="route-loading" role="alert"><div><p>{loadError}</p><button className="quiet-button" onClick={() => window.location.reload()} type="button">Try again</button></div></main>
 
   async function saveProfile(nextProfile) {
@@ -2550,6 +3500,15 @@ function App() {
   async function createDrive(drive) {
     await apiRequest('/tp/drives', { method: 'POST', body: drive })
     window.location.href = '/tp'
+  }
+
+  async function updateDrive(driveId, drivePayload) {
+    const response = await apiRequest(`/tp/drives/${driveId}`, { method: 'PUT', body: drivePayload })
+    setDriveData((prev) => prev.map((d) => (d.id === driveId ? response.drive : d)))
+    if (activeDrive && activeDrive.id === driveId) {
+      setActiveDrive(response.drive)
+    }
+    return response.drive
   }
 
   async function applyToDrive(drive) {
@@ -2682,7 +3641,7 @@ function App() {
 
   let page
   if (path === '/student') page = <StudentDashboard profile={profile} resume={resume} scorecard={scorecard} certificates={certificates} onSaveProfile={saveProfile} onSaveResume={saveResume} onViewResume={viewStudentResume} onSaveScorecard={saveScorecard} onViewScorecard={viewStudentScorecard} onUpdateSemGpa={updateSemGpa} onCreateCertificate={createCertificate} onUpdateCertificate={updateCertificate} onDeleteCertificate={deleteCertificate} onViewCertificate={viewCertificate} applications={applications} />
-  else if (path === '/tp') page = <TPCommandCenter driveData={driveData} studentList={studentList} />
+  else if (path === '/tp') page = <TPCommandCenter driveData={driveData} studentList={studentList} onEditDrive={updateDrive} />
   else if (path === '/tp/create') page = <CreateDrivePage onCreateDrive={createDrive} />
   else if (path.startsWith('/tp/students/')) {
     page = activeStudent ? (
@@ -2699,7 +3658,10 @@ function App() {
       <main className="workspace-content"><a className="back-link" href="/tp">← <span>T&amp;P Center</span></a><h1>Student not found</h1></main>
     )
   } else if (path.startsWith('/tp/drives/')) {
-    page = activeDrive ? <ApplicantReview drive={activeDrive} applicants={applicants} onUpdateStatus={updateApplicationStatus} onViewResume={(id) => protectedFileUrl(`/tp/applications/${id}/resume`)} /> : <main className="workspace-content"><a className="back-link" href="/tp">← <span>T&amp;P Center</span></a><h1>Drive not found</h1></main>
+    page = activeDrive ? <ApplicantReview drive={activeDrive} applicants={applicants} onUpdateStatus={updateApplicationStatus} onViewResume={(id) => protectedFileUrl(`/tp/applications/${id}/resume`)} onReloadApplicants={async () => {
+      const applicantResponse = await apiRequest(`/tp/drives/${activeDrive.id}/applicants`)
+      setApplicants(applicantResponse.applicants)
+    }} onEditDrive={updateDrive} /> : <main className="workspace-content"><a className="back-link" href="/tp">← <span>T&amp;P Center</span></a><h1>Drive not found</h1></main>
   } else if (path === '/alumni') page = <AlumniHub
     activeAlumniTab={alumniTab}
     activeChatConversationId={activeChatConversationId}
@@ -2727,12 +3689,14 @@ function App() {
     setActiveChatConversationId={setActiveChatConversationId}
     user={user}
   />
+  else if (path === '/notices' || path === '/notice-board') page = <NoticeBoard user={user} profile={profile} driveData={driveData} />
+  else if (path === '/analytics' || path === '/placement-stats') page = <PlacementAnalytics user={user} />
   else if (activeDrive) page = <DriveDetail drive={activeDrive} user={user} profile={profile} isApplied={applications.some((application) => application.drive.id === activeDrive.id)} onApply={applyToDrive} />
-  else page = <DriveListing driveData={driveData} />
+  else page = <DriveListing driveData={driveData} user={user} profile={profile} />
 
   return (
     <div className="app-shell">
-      <Header activeAlumniTab={alumniTab} onSelectAlumniTab={setAlumniTab} onSignOut={signOut} user={user} />
+      <Header activeAlumniTab={alumniTab} onSelectAlumniTab={setAlumniTab} onSignOut={signOut} user={user} theme={theme} onToggleTheme={toggleTheme} />
       {page}
       {activeResume && (
         <div className="resume-viewer-backdrop" role="presentation" onClick={() => setActiveResume(null)}>
@@ -2753,7 +3717,7 @@ function App() {
         }}
         onDownload={downloadTPCertificate}
       />
-      <footer className="site-footer">CareerCompass AI — placement intelligence for the campus cell. Scores explain themselves; humans make the calls.</footer>
+      <footer className="site-footer">CareerBridge AI — placement intelligence for the campus cell. Scores explain themselves; humans make the calls.</footer>
     </div>
   )
 }

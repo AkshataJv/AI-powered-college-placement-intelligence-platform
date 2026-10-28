@@ -1,4 +1,4 @@
-# CareerCompass FastAPI Backend
+# CareerBridge FastAPI Backend
 
 This backend uses FastAPI, SQLAlchemy, MySQL/PyMySQL, Pydantic, JWT, and Argon2 password hashing. It creates missing tables on startup but never drops or resets existing tables or data. It does not seed demo records.
 
@@ -12,7 +12,7 @@ This backend uses FastAPI, SQLAlchemy, MySQL/PyMySQL, Pydantic, JWT, and Argon2 
 Connect to the local MySQL Server at `localhost:3306` as `root`, open a SQL tab, and run:
 
 ```sql
-CREATE DATABASE careercompass
+CREATE DATABASE careerbridge
   CHARACTER SET utf8mb4
   COLLATE utf8mb4_unicode_ci;
 ```
@@ -36,7 +36,7 @@ Set `TP_CELL_INVITE_CODE` to a private value and include that value as `tp_cell_
 Example format (placeholder only):
 
 ```dotenv
-DATABASE_URL=mysql+pymysql://root:YOUR_MYSQL_PASSWORD@localhost:3306/careercompass
+DATABASE_URL=mysql+pymysql://root:YOUR_MYSQL_PASSWORD@localhost:3306/careerbridge
 SECRET_KEY=CHANGE_THIS_SECRET_KEY
 ALGORITHM=HS256
 ACCESS_TOKEN_EXPIRE_MINUTES=60

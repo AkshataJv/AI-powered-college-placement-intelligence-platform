@@ -1,6 +1,6 @@
-# CareerCompass AI — Placement & T&P Connect Platform
+# CareerBridge AI — Placement & T&P Connect Platform
 
-CareerCompass AI is a full-stack placement management platform for college campuses, supporting three role-based workspaces:
+CareerBridge AI is a full-stack placement management platform for college campuses, supporting three role-based workspaces:
 
 - **Student** — Profile, resume, certifications, skills, applications, roadmap, alumni mentorship
 - **T&P Officer** — Drive management, analytics, student readiness dashboard, announcements
@@ -11,7 +11,7 @@ CareerCompass AI is a full-stack placement management platform for college campu
 ## Project Structure
 
 ```text
-CareerCompass/
+CareerBridge/
 │
 ├── frontend/                  ← React/Vite source code
 │   ├── public/                ← Static assets (favicon, icons)
@@ -55,7 +55,7 @@ CareerCompass/
 │   └── README.md              ← Database setup instructions
 │
 ├── data/                      ← SQLite DB & uploads (not in Git)
-│   ├── career-compass.sqlite
+│   ├── career-bridge.sqlite
 │   └── uploads/
 │
 ├── docs/                      ← Project documentation
@@ -112,7 +112,7 @@ The FastAPI backend connects to a local MySQL database.
 
 ```powershell
 # 1. Create MySQL database (run once in MySQL Workbench)
-# CREATE DATABASE careercompass CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+# CREATE DATABASE careerbridge CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 
 # 2. Set up Python virtual environment
 cd backend
