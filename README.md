@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # CareerBridge AI — Placement & T&P Connect Platform
 
 CareerBridge AI is a full-stack placement management platform for college campuses, supporting three role-based workspaces:
@@ -186,3 +187,6 @@ For the frontend to connect to FastAPI instead of the Node server, update `vite.
 - Set `TP_CELL_INVITE_CODE` to a private value to prevent unauthorized T&P account creation.
 - Resume files are stored outside the public web root and served only to authorized users.
 - All passwords are hashed (bcrypt for Node.js, Argon2 for FastAPI).
+=======
+# AI-powered-college-placement-intelligence-platform
+>>>>>>> 877eaa93b3af2de11a5e87d7d3696928306a05be
