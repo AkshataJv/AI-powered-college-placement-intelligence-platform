@@ -230,6 +230,7 @@ These are potential improvements, not a guarantee that every feature is currentl
 CareerBridge AI explores how full-stack engineering, data-driven insights, and AI-assisted workflows can improve the college placement experience.
 
 **Developed by:** [Akshata Jadhav](https://github.com/AkshataJv)
+                  [Vivek Hudekar](https://github.com/hudekarvivek)
 
 **Repository:** [AI-powered College Placement Intelligence Platform](https://github.com/AkshataJv/AI-powered-college-placement-intelligence-platform)
 
