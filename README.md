@@ -1,192 +1,240 @@
-<<<<<<< HEAD
-# CareerBridge AI — Placement & T&P Connect Platform
+# 🎓 CareerBridge AI
+### AI-Powered College Placement Intelligence Platform
 
-CareerBridge AI is a full-stack placement management platform for college campuses, supporting three role-based workspaces:
+**Connecting students, alumni, and placement teams to make campus placements more organized, collaborative, and data-informed.**
 
-- **Student** — Profile, resume, certifications, skills, applications, roadmap, alumni mentorship
-- **T&P Officer** — Drive management, analytics, student readiness dashboard, announcements
-- **Alumni** — Profile directory, mentorship requests, mock interview slots, referrals
+CareerBridge AI is a full-stack college placement platform designed to bring placement activities, student profiles, career preparation, and alumni mentorship into one place.
+
+Instead of keeping placement information scattered across different channels, the platform provides a shared workspace where students can explore opportunities, placement officers can manage recruitment drives, and alumni can support students through mentorship and referrals.
+
+> 🚧 **Project status:** Under development. Features and integrations may evolve as the platform progresses.
 
 ---
 
-## Project Structure
+## ✨ Key Features
+
+### 👩‍🎓 Student Workspace
+- **Student profiles:** Maintain skills, certifications, and career-related information.
+- **Resume management:** Upload and access resumes.
+- **Placement applications:** Explore placement drives and apply for eligible opportunities.
+- **Alumni mentorship:** Request guidance and connect with alumni.
+- **Career preparation:** Organize career goals and preparation activities.
+
+### 🏢 Training & Placement (T&P) Workspace
+- **Placement drive management:** Create and manage recruitment drives.
+- **Student applications:** Support the placement application workflow.
+- **Placement coordination:** Organize recruitment-related information and activities.
+- **Readiness and analytics:** Provide a foundation for monitoring placement progress.
+
+### 🤝 Alumni Workspace
+- **Alumni directory:** Discover alumni profiles.
+- **Mentorship requests:** Support student–alumni connections.
+- **Mock interviews:** Manage interview slots.
+- **Referral support:** Facilitate alumni referrals.
+
+### 💡 AI-Powered Placement Intelligence — Project Direction
+The platform is designed to support smarter, more personalized placement preparation. Potential extensions include:
+
+- Placement readiness scoring
+- Resume analysis and feedback
+- Personalized skill-gap analysis
+- Company-specific preparation roadmaps
+- AI-powered interview practice
+- Coding and aptitude recommendations
+- Personalized study planning
+- Data-driven placement insights
+
+*These AI capabilities should be considered planned or evolving functionality unless they are implemented and tested in the current version.*
+
+---
+
+## 🛠️ Technology Stack
+
+| Layer | Technologies |
+|---|---|
+| Frontend | React 19, Vite 8, CSS |
+| Backend API | Node.js, Express 5 |
+| Primary development database | SQLite |
+| Alternative backend | Python, FastAPI, SQLAlchemy |
+| Alternative database | MySQL 8 |
+| Authentication | JWT-based authentication |
+| Password security | bcryptjs / Argon2, depending on backend |
+| Development tools | Git, GitHub, npm |
+
+The repository contains both a Node.js/SQLite backend and a Python/FastAPI/MySQL backend. Follow the setup instructions for the backend you intend to run.
+
+---
+
+## 🏗️ Project Structure
 
 ```text
-CareerBridge/
+AI-powered-college-placement-intelligence-platform/
 │
-├── frontend/                  ← React/Vite source code
-│   ├── public/                ← Static assets (favicon, icons)
-│   │   ├── favicon.svg
-│   │   └── icons.svg
-│   ├── src/                   ← Application source
-│   │   ├── assets/            ← Images and static files
-│   │   ├── App.jsx            ← Main React component (all pages)
-│   │   ├── App.css            ← Application styles
-│   │   ├── api.js             ← API client (fetch wrapper, JWT, session)
-│   │   ├── index.css          ← Global CSS reset
-│   │   └── main.jsx           ← React entry point
-│   ├── index.html             ← HTML entry point (Vite root)
-│   ├── .env                   ← Local secrets (not committed)
-│   └── .env.example           ← Environment variable template
+├── ai-service/          # AI-related services
+├── backend/             # Python FastAPI backend
+├── database/            # Database schemas and documentation
+├── docs/                # Project documentation and notes
+├── frontend/            # React frontend application
+├── public/              # Public assets
+├── scripts/             # Utility scripts
+├── server/              # Node.js / Express API
+├── src/                 # Root-level source files, if used
 │
-├── server/                    ← Node.js / Express API (SQLite)
-│   ├── index.js               ← Express routes, middleware, JWT auth
-│   └── db.js                  ← SQLite schema + better-sqlite3 setup
-│
-├── backend/                   ← Python / FastAPI API (MySQL)
-│   ├── app/
-│   │   ├── __init__.py
-│   │   ├── main.py            ← FastAPI entry point, CORS, routers
-│   │   ├── database.py        ← SQLAlchemy engine + session
-│   │   ├── dependencies.py    ← Auth & role dependencies
-│   │   ├── auth/              ← JWT creation/decoding, password hashing
-│   │   ├── models/            ← SQLAlchemy ORM models
-│   │   ├── schemas/           ← Pydantic request/response schemas
-│   │   └── routers/           ← FastAPI route handlers
-│   ├── uploads/               ← Uploaded resume files (not in Git)
-│   │   └── resumes/
-│   ├── requirements.txt       ← Python dependencies
-│   ├── .env                   ← Local secrets (not committed)
-│   ├── .env.example           ← Environment variable template
-│   └── README.md              ← Backend setup guide
-│
-├── database/                  ← Database documentation
-│   ├── sqlite-schema.sql      ← SQLite schema (Node.js server)
-│   ├── mysql-schema.sql       ← MySQL schema reference (FastAPI)
-│   └── README.md              ← Database setup instructions
-│
-├── data/                      ← SQLite DB & uploads (not in Git)
-│   ├── career-bridge.sqlite
-│   └── uploads/
-│
-├── docs/                      ← Project documentation
-│   ├── diagrams/
-│   ├── reports/
-│   ├── presentations/
-│   └── project-notes/
-│
-├── dist/                      ← Vite build output (not in Git)
-├── node_modules/              ← Node.js dependencies (not in Git)
-├── package.json               ← Root Node.js config
-├── vite.config.js             ← Vite config (root: frontend/)
-├── .oxlintrc.json             ← ESLint (oxlint) config
-├── .env                       ← Root .env for Node.js server
-├── .env.example               ← Root .env template
+├── .env.example         # Environment variable template
 ├── .gitignore
+├── package.json
+├── vite.config.js
 └── README.md
 ```
 
 ---
 
-## Quick Start
+## 🚀 Getting Started
 
-### Option A — Node.js Full Stack (SQLite)
+Follow these instructions to run the primary Node.js + SQLite development setup on your local machine.
 
-The primary development setup uses Node.js + Express + SQLite for the API, and Vite for the React frontend.
+### Prerequisites
 
-**Requirements:** Node.js 20+
+Install the following:
 
-```powershell
-# 1. Install dependencies
-npm install
+- [Node.js](https://nodejs.org/) — version 20 or newer
+- npm — included with Node.js
+- [Git](https://git-scm.com/)
 
-# 2. Configure environment
-Copy-Item .env.example .env
-# Edit .env and set a strong JWT_SECRET
+### 1. Clone the repository
 
-# 3. Start API + Vite together
-npm run dev
-
-# Frontend: http://127.0.0.1:5173/
-# API:      http://127.0.0.1:3001/api/
+```bash
+git clone https://github.com/AkshataJv/AI-powered-college-placement-intelligence-platform.git
 ```
 
-The SQLite database and uploaded files are written under `data/` (excluded from Git).
+### 2. Navigate to the project
+
+```bash
+cd AI-powered-college-placement-intelligence-platform
+```
+
+### 3. Install dependencies
+
+```bash
+npm install
+```
+
+### 4. Configure environment variables
+
+In Windows PowerShell:
+
+```powershell
+Copy-Item .env.example .env
+```
+
+Open `.env` and configure the required variables according to the project's environment template.
+
+**Security:** Use a strong, private JWT secret. Never commit real credentials, API keys, database passwords, or private environment files to GitHub.
+
+### 5. Start the application
+
+```bash
+npm run dev
+```
+
+When startup succeeds, the development services should be available at:
+
+- **Frontend:** http://127.0.0.1:5173/
+- **Node.js API:** http://127.0.0.1:3001/api/
+
+Keep the terminal running while using the application.
 
 ---
 
-### Option B — Python FastAPI Backend (MySQL)
+## 🐍 Alternative Backend: FastAPI + MySQL
 
-The FastAPI backend connects to a local MySQL database.
+The repository also includes a Python backend for a MySQL-based setup.
 
-**Requirements:** Python 3.10+, MySQL Server 8.x
+### Prerequisites
+
+- Python 3.10 or newer
+- MySQL Server 8.x
+
+### Setup
+
+Create a MySQL database named `careerbridge`, then run the following in PowerShell:
 
 ```powershell
-# 1. Create MySQL database (run once in MySQL Workbench)
-# CREATE DATABASE careerbridge CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
-
-# 2. Set up Python virtual environment
 cd backend
+
 python -m venv venv
 .\venv\Scripts\Activate.ps1
+
 pip install -r requirements.txt
 
-# 3. Configure environment
 Copy-Item .env.example .env
-# Edit backend/.env: set DATABASE_URL, SECRET_KEY, TP_CELL_INVITE_CODE
-
-# 4. Start FastAPI
-uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
-
-# Swagger docs: http://127.0.0.1:8000/docs
-# Health check: http://127.0.0.1:8000/api/health
 ```
 
-For the frontend to connect to FastAPI instead of the Node server, update `vite.config.js` proxy port from `3001` to `8000`.
+Configure the required database URL and secret values in `backend/.env`, then start the API:
+
+```powershell
+uvicorn app.main:app --reload --host 127.0.0.1 --port 8000
+```
+
+When the service starts successfully, the interactive API documentation should be available at:
+
+http://127.0.0.1:8000/docs
+
+Refer to the backend and database documentation for the configuration details specific to this setup.
 
 ---
 
-## Available Scripts
+## 📜 Available Commands
 
-| Script | Description |
-|--------|-------------|
-| `npm run dev` | Start Node.js API (port 3001) + Vite (port 5173) together |
-| `npm run server` | Start only the Node.js API server |
-| `npm run build` | Production Vite build → `dist/` |
-| `npm run lint` | Run oxlint on `frontend/src/` |
-| `npm run preview` | Preview the production build |
+Run these commands from the project root:
 
----
-
-## API Endpoints (Node.js Server)
-
-| Method | Path | Description |
-|--------|------|-------------|
-| POST | `/api/auth/register` | Create account |
-| POST | `/api/auth/login` | Log in, receive JWT |
-| GET | `/api/auth/me` | Current user profile |
-| GET | `/api/drives` | List placement drives |
-| POST | `/api/drives` | Create drive (T&P only) |
-| POST | `/api/drives/:id/apply` | Apply to a drive (Student) |
-| GET | `/api/alumni` | List alumni |
-| GET | `/api/resumes/:id` | Download a resume |
-| POST | `/api/students/resume` | Upload resume |
-| GET/POST | `/api/certificates` | Student certifications |
-| GET/POST | `/api/mentorship` | Mentorship requests |
-| GET/POST | `/api/interview-slots` | Mock interview slots |
-| POST | `/api/referrals` | Alumni referrals |
-| GET/POST | `/api/forum` | Community forum |
+| Command | Purpose |
+|---|---|
+| `npm install` | Install Node.js dependencies |
+| `npm run dev` | Start the development services |
+| `npm run server` | Start the Node.js API server |
+| `npm run build` | Build the frontend for production |
+| `npm run lint` | Check frontend code with the configured linter |
+| `npm run preview` | Preview the production frontend build |
 
 ---
 
-## Technology Stack
+## 🔐 Security Considerations
 
-| Layer | Technology |
-|-------|------------|
-| Frontend | React 19, Vite 8, Vanilla CSS |
-| Node.js API | Express 5, better-sqlite3, bcryptjs, JWT |
-| FastAPI | Python, FastAPI, SQLAlchemy, PyMySQL, Argon2 |
-| Databases | SQLite (dev/Node), MySQL 8 (FastAPI) |
-| Auth | JWT (jsonwebtoken / python-jose) |
+- Keep `.env` files and credentials out of version control.
+- Use strong secrets and appropriate authentication settings.
+- Protect student profiles, resumes, and other personal information.
+- Restrict sensitive operations according to user roles.
+- Never publish private student data or production database files.
+- Validate inputs and test authorization before deploying the platform.
 
 ---
 
-## Security Notes
+## 🗺️ Future Improvements
 
-- Never commit `.env` files — they contain `JWT_SECRET`, database passwords, and invite codes.
-- Set `TP_CELL_INVITE_CODE` to a private value to prevent unauthorized T&P account creation.
-- Resume files are stored outside the public web root and served only to authorized users.
-- All passwords are hashed (bcrypt for Node.js, Argon2 for FastAPI).
-=======
-# AI-powered-college-placement-intelligence-platform
->>>>>>> 877eaa93b3af2de11a5e87d7d3696928306a05be
+Potential areas for further development include:
+
+- More personalized AI-driven placement preparation
+- Company-specific interview preparation resources
+- Improved placement analytics and reporting
+- Expanded alumni mentoring and knowledge sharing
+- Automated readiness assessments and study plans
+- Integrations with coding platforms and external placement resources
+
+These are potential improvements, not a guarantee that every feature is currently available.
+
+---
+
+## 👩‍💻 About the Project
+
+CareerBridge AI explores how full-stack engineering, data-driven insights, and AI-assisted workflows can improve the college placement experience.
+
+**Developed by:** [Akshata Jadhav](https://github.com/AkshataJv)
+
+**Repository:** [AI-powered College Placement Intelligence Platform](https://github.com/AkshataJv/AI-powered-college-placement-intelligence-platform)
+
+---
+
+## 📄 License
+
+A license has not yet been specified. Please add an appropriate license before explicitly permitting others to reuse, modify, or distribute the project.
